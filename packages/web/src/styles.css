@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #18212f;
   background: #eef1f5;
@@ -18,7 +19,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -41,13 +43,21 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   border: 1px solid #c5ccd8;
   border-radius: 6px;
   min-height: 34px;
   padding: 0 10px;
   background: #ffffff;
   color: #18212f;
+}
+
+textarea {
+  min-height: 108px;
+  padding: 9px 10px;
+  resize: vertical;
+  line-height: 1.4;
 }
 
 .app-shell {
@@ -239,14 +249,90 @@ h3 {
   max-height: calc(100vh - 178px);
 }
 
+.task-list-header {
+  display: grid;
+  grid-template-columns: 24px 14px minmax(0, 1fr) minmax(112px, 0.34fr) minmax(150px, 0.48fr) 86px 92px;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 0 0 10px;
+  border-bottom: 1px solid #dfe4ed;
+  color: #657083;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
 .task-row {
   display: grid;
-  grid-template-columns: 24px 14px minmax(0, 1fr) 90px 92px;
+  grid-template-columns: 24px 14px minmax(0, 1fr) minmax(112px, 0.34fr) minmax(150px, 0.48fr) 86px 92px;
   align-items: center;
   gap: 8px;
   min-height: 56px;
   border-bottom: 1px solid #edf0f5;
   cursor: pointer;
+}
+
+.assignee-cell {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #657083;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.assignee-cell span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assignee-cell.assigned {
+  color: #18212f;
+  font-weight: 650;
+}
+
+.tag-cell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.tag-chip,
+.more-chip {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d7dce6;
+  background: #f8fafc;
+  color: #394456;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.tag-chip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.more-chip,
+.empty-cell {
+  color: #657083;
+  font-size: 12px;
 }
 
 .task-row:hover,
@@ -418,6 +504,27 @@ h3 {
   line-height: 1.35;
 }
 
+.content-editor label {
+  display: grid;
+  gap: 5px;
+}
+
+.content-editor label span {
+  color: #657083;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.title-input,
+.description-textarea {
+  width: 100%;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .blocked-line {
   color: #9e3528 !important;
 }
@@ -431,10 +538,36 @@ h3 {
 }
 
 .assign-buttons,
-.details-actions {
+.details-actions,
+.tag-editor-list,
+.tag-assign-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.tag-editor-list {
+  align-items: center;
+}
+
+.tag-remove {
+  padding: 0 6px;
+  gap: 5px;
+}
+
+.tag-remove .tag-chip {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.tag-assign-row {
+  flex-wrap: nowrap;
+}
+
+.tag-assign-row select {
+  min-width: 0;
+  flex: 1;
 }
 
 .wide-view {
@@ -597,8 +730,14 @@ h3 {
     padding-right: 10px;
   }
 
+  .task-list-header {
+    display: none;
+  }
+
   .task-row > .progress,
-  .row-actions {
+  .row-actions,
+  .assignee-cell,
+  .tag-cell {
     grid-column: 3;
   }
 
@@ -608,5 +747,140 @@ h3 {
   .activity-row,
   .tag-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #edf2f7;
+    background: #111318;
+  }
+
+  body {
+    background: #111318;
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  .search-wrap {
+    background: #202630;
+    border-color: #3a4555;
+    color: #edf2f7;
+  }
+
+  .sidebar {
+    background: #0c0f14;
+  }
+
+  .nav-button {
+    color: #aeb8c8;
+  }
+
+  .nav-button.active,
+  .nav-button:hover {
+    background: #202734;
+    color: #f6f7f9;
+  }
+
+  .ready-summary > div {
+    background: #171d26;
+  }
+
+  .label {
+    color: #aeb8c8;
+  }
+
+  .toolbar,
+  .task-list-panel,
+  .details-panel,
+  .wide-view {
+    background: #181c23;
+    border-color: #303846;
+  }
+
+  .panel-heading,
+  .view-heading,
+  .quick-create,
+  .task-list-header,
+  .task-row,
+  .detail-section,
+  .tag-row,
+  .activity-row,
+  .coverage-row {
+    border-color: #2a3240;
+  }
+
+  .task-row:hover,
+  .task-row.selected {
+    background: #202630;
+  }
+
+  h3,
+  .panel-heading p,
+  .task-list-header,
+  .task-meta,
+  .toggle,
+  .details-panel.empty,
+  .details-header p,
+  .content-editor label span,
+  .metric-box span,
+  .detail-section p,
+  .task-mini span,
+  .muted,
+  .coverage-row.header {
+    color: #a8b2c1;
+  }
+
+  .task-meta span,
+  .progress,
+  .tag-chip,
+  .more-chip {
+    background: #252c36;
+  }
+
+  .assignee-cell,
+  .empty-cell {
+    color: #a8b2c1;
+  }
+
+  .assignee-cell.assigned {
+    color: #edf2f7;
+  }
+
+  .tag-chip,
+  .more-chip {
+    border-color: #3a4555;
+    color: #d5dce7;
+  }
+
+  .metric-box,
+  .queue-column,
+  .task-mini {
+    border-color: #2a3240;
+  }
+
+  .blocked-line,
+  .assignable.no {
+    color: #ffb2a8 !important;
+  }
+
+  .assignable.yes,
+  .progress span {
+    color: #22b889;
+    background: #22b889;
+  }
+
+  .error {
+    color: #ffb2a8;
+    background: #3a1b1b;
+    border-color: #7e332b;
+  }
+
+  .loading {
+    color: #c4d6f5;
+    background: #17253b;
+    border-color: #29466d;
   }
 }

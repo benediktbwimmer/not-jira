@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Search,
   Tags,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import "./styles.css";
 
@@ -188,45 +189,104 @@ function App() {
     if (!newTask.id.trim() || !newTask.title.trim()) {
       return;
     }
-    await mutate("/api/tasks", {
-      method: "POST",
-      body: {
-        id: newTask.id,
-        title: newTask.title,
-        parentTaskId: newTask.parentTaskId.trim() || null,
-        priority: Number(newTask.priority)
-      }
+    await runMutation(async () => {
+      await mutate("/api/tasks", {
+        method: "POST",
+        body: {
+          id: newTask.id,
+          title: newTask.title,
+          parentTaskId: newTask.parentTaskId.trim() || null,
+          priority: Number(newTask.priority)
+        }
+      });
+      setNewTask({ id: "", title: "", parentTaskId: "", priority: "2" });
+      await refresh();
     });
-    setNewTask({ id: "", title: "", parentTaskId: "", priority: "2" });
-    await refresh();
   }
 
   async function transitionTask(task: TaskView, action: "start" | "finish" | "reopen" | "archive") {
-    await mutate(`/api/tasks/${task.id}/${action}`, { method: "POST" });
-    await refresh();
+    await runMutation(async () => {
+      await mutate(`/api/tasks/${task.id}/${action}`, { method: "POST" });
+      await refresh();
+    });
+  }
+
+  async function updateTask(task: TaskView, input: { title: string; description: string }) {
+    await runMutation(async () => {
+      await mutate(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        body: {
+          title: input.title,
+          description: input.description
+        }
+      });
+      await refresh();
+    });
   }
 
   async function createTrack() {
     if (!newTrack.trim()) {
       return;
     }
-    await mutate("/api/tracks", { method: "POST", body: { actor: newTrack.trim() } });
-    setNewTrack("");
-    await refresh();
+    await runMutation(async () => {
+      await mutate("/api/tracks", { method: "POST", body: { actor: newTrack.trim() } });
+      setNewTrack("");
+      await refresh();
+    });
   }
 
   async function createTag() {
     if (!newTag.trim()) {
       return;
     }
-    await mutate("/api/tags", { method: "POST", body: { name: newTag.trim() } });
-    setNewTag("");
-    await refresh();
+    await runMutation(async () => {
+      await mutate("/api/tags", { method: "POST", body: { name: newTag.trim() } });
+      setNewTag("");
+      await refresh();
+    });
   }
 
   async function assignTask(track: TrackRecord, task: TaskView) {
-    await mutate(`/api/tracks/${track.id}/assignments`, { method: "POST", body: { taskId: task.id } });
-    await refresh();
+    await runMutation(async () => {
+      await mutate(`/api/tracks/${track.id}/assignments`, { method: "POST", body: { taskId: task.id } });
+      await refresh();
+    });
+  }
+
+  async function unassignTask(task: TaskView) {
+    if (!task.assignedTrack) {
+      return;
+    }
+    await runMutation(async () => {
+      await mutate(`/api/tracks/${task.assignedTrack?.trackId}/assignments/${task.id}`, { method: "DELETE" });
+      await refresh();
+    });
+  }
+
+  async function assignTag(task: TaskView, tagId: string) {
+    if (!tagId) {
+      return;
+    }
+    await runMutation(async () => {
+      await mutate(`/api/tasks/${task.id}/tags/${tagId}`, { method: "POST" });
+      await refresh();
+    });
+  }
+
+  async function removeTag(task: TaskView, tagId: string) {
+    await runMutation(async () => {
+      await mutate(`/api/tasks/${task.id}/tags/${tagId}`, { method: "DELETE" });
+      await refresh();
+    });
+  }
+
+  async function runMutation(fn: () => Promise<void>) {
+    setError(null);
+    try {
+      await fn();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   }
 
   return (
@@ -288,6 +348,15 @@ function App() {
                 <Filter size={18} />
               </div>
               <QuickCreateTask value={newTask} tasks={tasks} onChange={setNewTask} onSubmit={() => void createTask()} />
+              <div className="task-list-header">
+                <span />
+                <span />
+                <span>Task</span>
+                <span>Assignee</span>
+                <span>Tags</span>
+                <span>Progress</span>
+                <span>Actions</span>
+              </div>
               <div className="task-tree">
                 {roots.map((node) => (
                   <TaskNode
@@ -300,7 +369,18 @@ function App() {
                 ))}
               </div>
             </div>
-            <TaskDetails task={selectedTask} explanation={explanation} tracks={tracks} onAssign={(track, task) => void assignTask(track, task)} onTransition={(task, action) => void transitionTask(task, action)} />
+            <TaskDetails
+              task={selectedTask}
+              explanation={explanation}
+              tracks={tracks}
+              tags={tags}
+              onAssign={(track, task) => void assignTask(track, task)}
+              onUnassign={(task) => void unassignTask(task)}
+              onAssignTag={(task, tagId) => void assignTag(task, tagId)}
+              onRemoveTag={(task, tagId) => void removeTag(task, tagId)}
+              onUpdate={(task, input) => void updateTask(task, input)}
+              onTransition={(task, action) => void transitionTask(task, action)}
+            />
           </section>
         ) : null}
 
@@ -388,8 +468,15 @@ function TaskNode({ node, selectedId, onSelect, onTransition }: { node: TreeNode
             <span>depth {task.dependencyDepth}</span>
             <span>unblocks {task.transitiveDependentsCount}</span>
             {task.descendantsCount > 0 ? <span>{task.subtreeProgress}% subtree</span> : null}
-            {task.assignedTrack ? <span>{task.assignedTrack.actor}</span> : null}
           </div>
+        </div>
+        <div className={task.assignedTrack ? "assignee-cell assigned" : "assignee-cell"}>
+          <UserRound size={14} />
+          <span>{task.assignedTrack?.actor ?? "unassigned"}</span>
+        </div>
+        <div className="tag-cell">
+          {task.tags.length > 0 ? task.tags.slice(0, 3).map((tag) => <TagChip key={tag.id} tag={tag} />) : <span className="empty-cell">no tags</span>}
+          {task.tags.length > 3 ? <span className="more-chip">+{task.tags.length - 3}</span> : null}
         </div>
         <Progress value={task.descendantsCount > 0 ? task.subtreeProgress : task.lifecycle === "finished" ? 100 : 0} />
         <div className="row-actions">
@@ -403,10 +490,43 @@ function TaskNode({ node, selectedId, onSelect, onTransition }: { node: TreeNode
   );
 }
 
-function TaskDetails({ task, explanation, tracks, onAssign, onTransition }: { task: TaskView | null; explanation: Explanation | null; tracks: TrackRecord[]; onAssign: (track: TrackRecord, task: TaskView) => void; onTransition: (task: TaskView, action: "start" | "finish" | "reopen" | "archive") => void }) {
+function TaskDetails({
+  task,
+  explanation,
+  tracks,
+  tags,
+  onAssign,
+  onUnassign,
+  onAssignTag,
+  onRemoveTag,
+  onUpdate,
+  onTransition
+}: {
+  task: TaskView | null;
+  explanation: Explanation | null;
+  tracks: TrackRecord[];
+  tags: TagRecord[];
+  onAssign: (track: TrackRecord, task: TaskView) => void;
+  onUnassign: (task: TaskView) => void;
+  onAssignTag: (task: TaskView, tagId: string) => void;
+  onRemoveTag: (task: TaskView, tagId: string) => void;
+  onUpdate: (task: TaskView, input: { title: string; description: string }) => void;
+  onTransition: (task: TaskView, action: "start" | "finish" | "reopen" | "archive") => void;
+}) {
+  const [tagToAssign, setTagToAssign] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+
+  useEffect(() => {
+    setDraftTitle(task?.title ?? "");
+    setDraftDescription(task?.description ?? "");
+  }, [task?.id, task?.title, task?.description]);
+
   if (!task) {
     return <aside className="details-panel empty">No task selected</aside>;
   }
+  const assignableTags = tags.filter((tag) => !tag.archivedAt && !task.tags.some((taskTag) => taskTag.id === tag.id));
+  const contentChanged = draftTitle.trim() !== task.title || draftDescription !== task.description;
   return (
     <aside className="details-panel">
       <div className="details-header">
@@ -416,6 +536,21 @@ function TaskDetails({ task, explanation, tracks, onAssign, onTransition }: { ta
           <p>{task.title}</p>
         </div>
       </div>
+      <section className="detail-section content-editor">
+        <h3>Content</h3>
+        <label>
+          <span>Title</span>
+          <input className="title-input" value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
+        </label>
+        <label>
+          <span>Description</span>
+          <textarea className="description-textarea" value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} placeholder="Add implementation notes, acceptance criteria, links, or context." />
+        </label>
+        <div className="editor-actions">
+          <button disabled={!contentChanged || !draftTitle.trim()} onClick={() => onUpdate(task, { title: draftTitle.trim(), description: draftDescription })}>Save</button>
+          <button disabled={!contentChanged} onClick={() => { setDraftTitle(task.title); setDraftDescription(task.description); }}>Reset</button>
+        </div>
+      </section>
       <div className="detail-grid">
         <Metric label="Status" value={task.computedStatus} />
         <Metric label="Priority" value={`P${task.priority}`} />
@@ -439,12 +574,33 @@ function TaskDetails({ task, explanation, tracks, onAssign, onTransition }: { ta
       </section>
       <section className="detail-section">
         <h3>Assignment</h3>
+        <p>Current: {task.assignedTrack?.actor ?? "unassigned"}</p>
         <div className="assign-buttons">
           {tracks.filter((track) => !track.archivedAt).map((track) => (
             <button key={track.id} disabled={!explanation?.assignable || Boolean(task.assignedTrack)} onClick={() => onAssign(track, task)}>
               <UserRound size={15} /> {track.actor}
             </button>
           ))}
+          {task.assignedTrack ? <button onClick={() => onUnassign(task)}>Unassign</button> : null}
+          {tracks.filter((track) => !track.archivedAt).length === 0 ? <p>No actor queues yet. Add one in Queues.</p> : null}
+        </div>
+      </section>
+      <section className="detail-section">
+        <h3>Tags</h3>
+        <div className="tag-editor-list">
+          {task.tags.length > 0 ? task.tags.map((tag) => (
+            <button key={tag.id} className="tag-remove" onClick={() => onRemoveTag(task, tag.id)} title={`Remove ${tag.name}`}>
+              <TagChip tag={tag} />
+              <X size={13} />
+            </button>
+          )) : <p>No tags assigned.</p>}
+        </div>
+        <div className="tag-assign-row">
+          <select value={tagToAssign} onChange={(event) => setTagToAssign(event.target.value)}>
+            <option value="">Assign tag...</option>
+            {assignableTags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
+          </select>
+          <button disabled={!tagToAssign} onClick={() => { onAssignTag(task, tagToAssign); setTagToAssign(""); }}>Assign</button>
         </div>
       </section>
       <section className="detail-section">
@@ -556,6 +712,15 @@ function TaskMini({ task }: { task: TaskView }) {
       <StatusDot status={task.computedStatus} />
       <div><strong>{task.id}</strong><span>{task.title}</span></div>
     </div>
+  );
+}
+
+function TagChip({ tag }: { tag: TagRecord }) {
+  return (
+    <span className="tag-chip">
+      <span className="tag-dot" style={{ background: tag.color ?? "#64748b" }} />
+      <span>{tag.name}</span>
+    </span>
   );
 }
 
