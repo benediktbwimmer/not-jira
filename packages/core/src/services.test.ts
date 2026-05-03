@@ -60,7 +60,7 @@ describe("not-jira core services", () => {
     await expect(services.dependencies.add("A", "B")).rejects.toBeInstanceOf(NotJiraError);
   });
 
-  it("blocks assignment when dependencies are unfinished", async () => {
+  it("allows assignment when dependencies are unfinished", async () => {
     const store = createMemoryStore();
     const services = createServices(store);
 
@@ -69,9 +69,56 @@ describe("not-jira core services", () => {
     await services.dependencies.add("B", "A");
     await services.tracks.add({ actor: "codex-a" });
 
-    await expect(services.tracks.assign("codex-a", "B")).rejects.toBeInstanceOf(NotJiraError);
-    await services.tasks.finish("A");
     await expect(services.tracks.assign("codex-a", "B")).resolves.toMatchObject({ taskId: "B" });
+    const explanation = await services.query.explain("B");
+    expect(explanation.assignable).toBe(true);
+    expect(explanation.task.blocked).toBe(true);
+    expect(explanation.reason).toBe("Task can be assigned, but 1 dependency is unfinished.");
+  });
+
+  it("exports markdown as a complete readable graph report", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store);
+
+    await services.tasks.add({
+      id: "ROOT",
+      title: "Root task",
+      description: "Root description body"
+    });
+    await services.tasks.add({
+      id: "A",
+      parentTaskId: "ROOT",
+      title: "Dependency task",
+      description: "Dependency details\nwith a second line"
+    });
+    await services.tasks.add({
+      id: "B",
+      parentTaskId: "ROOT",
+      title: "Blocked task",
+      description: "Blocked task description",
+      sourceDoc: "docs/design.md",
+      sourceSection: "Export"
+    });
+    await services.dependencies.add("B", "A");
+    await services.tags.add({ id: "UI", name: "ui", color: "#22b889" });
+    await services.tags.assign("B", ["UI"]);
+    await services.tracks.add({ actor: "codex-a" });
+    await services.tracks.assign("codex-a", "A");
+
+    const markdown = await services.exports.markdown();
+
+    expect(markdown).toContain("# Not Jira Export");
+    expect(markdown).toContain("## Summary");
+    expect(markdown).toContain("### `B` Blocked task");
+    expect(markdown).toContain("Blocked task description");
+    expect(markdown).toContain("- Parent: ROOT Root task");
+    expect(markdown).toContain("- Tags: ui");
+    expect(markdown).toContain("- Source: docs/design.md - Export");
+    expect(markdown).toContain("- Dependencies: `A` Dependency task [ready]");
+    expect(markdown).toContain("- `B` Blocked task depends on `A` Dependency task");
+    expect(markdown).toContain("### codex-a");
+    expect(markdown).toContain("- `A` Dependency task [ready]");
+    expect(markdown).not.toContain("| Done |");
   });
 
   it("imports a full JSON graph in one service call", async () => {

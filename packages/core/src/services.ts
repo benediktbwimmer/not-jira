@@ -513,15 +513,11 @@ export class TrackService {
       if (track.archivedAt) {
         validation("Archived tracks cannot receive assignments.", { trackId: track.id });
       }
-      const view = (await this.query.list({ includeFinished: true, includeArchived: true })).find((item) => item.id === taskId) ?? notFound("task", taskId);
       if (task.archivedAt) {
         validation("Archived tasks cannot be assigned.", { taskId });
       }
       if (task.lifecycle === "finished") {
         validation("Finished tasks cannot be assigned.", { taskId });
-      }
-      if (view.blocked) {
-        validation("Blocked tasks cannot be assigned.", { taskId, unfinishedDependenciesCount: view.unfinishedDependenciesCount });
       }
       const assignments = await repos.tracks.listAssignments();
       if (assignments.some((assignment) => assignment.taskId === taskId)) {
@@ -672,14 +668,16 @@ export class QueryService {
     const dependencyViews = dependencies.map((dependency) => viewById.get(dependency.dependsOnTaskId)).filter((dependency): dependency is TaskView => Boolean(dependency));
     const unfinishedDependencies = dependencyViews.filter((dependency) => dependency.lifecycle !== "finished");
     const finishedDependencies = dependencyViews.filter((dependency) => dependency.lifecycle === "finished");
-    const assignable = !task.archivedAt && task.lifecycle !== "finished" && unfinishedDependencies.length === 0;
+    const assignable = !task.archivedAt && task.lifecycle !== "finished";
     const reason = assignable
-      ? "Task has no unfinished dependencies and can be assigned."
+      ? unfinishedDependencies.length > 0
+        ? `Task can be assigned, but ${formatCount(unfinishedDependencies.length, "dependency", "dependencies")} ${unfinishedDependencies.length === 1 ? "is" : "are"} unfinished.`
+        : "Task has no unfinished dependencies and can be assigned."
       : task.archivedAt
         ? "Archived tasks cannot be assigned."
         : task.lifecycle === "finished"
           ? "Finished tasks cannot be assigned."
-          : `${unfinishedDependencies.length} dependencies are unfinished.`;
+          : "Task cannot be assigned.";
 
     return {
       task,
@@ -1044,7 +1042,11 @@ export class ExportService {
 
   async markdown(): Promise<string> {
     const query = new QueryService(this.store);
-    return exportMarkdown(await query.list({ includeFinished: true, includeArchived: true }));
+    const [tasks, data] = await Promise.all([
+      query.list({ includeFinished: true, includeArchived: true }),
+      this.json(false)
+    ]);
+    return exportMarkdown(tasks, data);
   }
 }
 
@@ -1057,6 +1059,10 @@ async function ensureTaskPair(repos: RepositorySet, taskId: string, dependsOnTas
   if (dependency.archivedAt) {
     validation("Archived tasks cannot be dependencies in V1.", { dependsOnTaskId });
   }
+}
+
+function formatCount(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 async function ensureParentTask(repos: RepositorySet, taskId: string, parentTaskId: string | null): Promise<void> {

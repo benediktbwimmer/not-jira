@@ -577,7 +577,7 @@ function TaskDetails({
         <p>Current: {task.assignedTrack?.actor ?? "unassigned"}</p>
         <div className="assign-buttons">
           {tracks.filter((track) => !track.archivedAt).map((track) => (
-            <button key={track.id} disabled={!explanation?.assignable || Boolean(task.assignedTrack)} onClick={() => onAssign(track, task)}>
+            <button key={track.id} disabled={task.archivedAt !== null || task.lifecycle === "finished" || Boolean(task.assignedTrack)} onClick={() => onAssign(track, task)}>
               <UserRound size={15} /> {track.actor}
             </button>
           ))}

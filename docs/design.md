@@ -1010,8 +1010,10 @@ Assignment validation:
 - track must exist
 - task must not be archived
 - task must not be finished
-- task must not be blocked
 - task must not already be assigned to another track in V1
+
+Blocked tasks may be assigned to actor queues. Assignment means ownership or
+future queue placement; it does not mean the task is ready to start.
 
 Tag validation:
 
