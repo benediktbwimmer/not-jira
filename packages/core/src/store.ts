@@ -2,6 +2,7 @@ import type {
   Activity,
   Dependency,
   Migration,
+  Project,
   Tag,
   Task,
   TaskTag,
@@ -9,48 +10,55 @@ import type {
   TrackAssignment
 } from "./types.js";
 
+export interface ProjectRepository {
+  list(): Promise<Project[]>;
+  get(id: string): Promise<Project | null>;
+  create(project: Project): Promise<void>;
+  update(project: Project): Promise<void>;
+}
+
 export interface TaskRepository {
-  list(): Promise<Task[]>;
-  get(id: string): Promise<Task | null>;
+  list(projectId?: string): Promise<Task[]>;
+  get(projectId: string, id: string): Promise<Task | null>;
   create(task: Task): Promise<void>;
   update(task: Task): Promise<void>;
-  delete(id: string): Promise<void>;
+  delete(projectId: string, id: string): Promise<void>;
 }
 
 export interface DependencyRepository {
-  list(): Promise<Dependency[]>;
-  listForTask(taskId: string): Promise<Dependency[]>;
-  listDependents(dependsOnTaskId: string): Promise<Dependency[]>;
+  list(projectId?: string): Promise<Dependency[]>;
+  listForTask(projectId: string, taskId: string): Promise<Dependency[]>;
+  listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]>;
   add(dependency: Dependency): Promise<void>;
-  remove(taskId: string, dependsOnTaskId: string): Promise<void>;
-  replaceForTask(taskId: string, dependencies: Dependency[]): Promise<void>;
+  remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void>;
+  replaceForTask(projectId: string, taskId: string, dependencies: Dependency[]): Promise<void>;
 }
 
 export interface TagRepository {
-  list(): Promise<Tag[]>;
-  get(id: string): Promise<Tag | null>;
-  findByName(name: string): Promise<Tag | null>;
+  list(projectId?: string): Promise<Tag[]>;
+  get(projectId: string, id: string): Promise<Tag | null>;
+  findByName(projectId: string, name: string): Promise<Tag | null>;
   create(tag: Tag): Promise<void>;
   update(tag: Tag): Promise<void>;
-  listTaskTags(): Promise<TaskTag[]>;
+  listTaskTags(projectId?: string): Promise<TaskTag[]>;
   addTaskTag(taskTag: TaskTag): Promise<void>;
-  removeTaskTag(taskId: string, tagId: string): Promise<void>;
+  removeTaskTag(projectId: string, taskId: string, tagId: string): Promise<void>;
 }
 
 export interface TrackRepository {
-  list(): Promise<Track[]>;
-  get(id: string): Promise<Track | null>;
-  findByActor(actor: string): Promise<Track | null>;
+  list(projectId?: string): Promise<Track[]>;
+  get(projectId: string, id: string): Promise<Track | null>;
+  findByActor(projectId: string, machine: string, actor: string): Promise<Track | null>;
   create(track: Track): Promise<void>;
   update(track: Track): Promise<void>;
-  listAssignments(): Promise<TrackAssignment[]>;
+  listAssignments(projectId?: string): Promise<TrackAssignment[]>;
   assign(assignment: TrackAssignment): Promise<void>;
-  unassign(trackId: string, taskId: string): Promise<void>;
+  unassign(projectId: string, trackId: string, taskId: string): Promise<void>;
   updateAssignment(assignment: TrackAssignment): Promise<void>;
 }
 
 export interface ActivityRepository {
-  list(limit?: number): Promise<Activity[]>;
+  list(projectId?: string | null, limit?: number): Promise<Activity[]>;
   append(activity: Activity): Promise<void>;
 }
 
@@ -60,6 +68,7 @@ export interface MigrationRepository {
 }
 
 export interface RepositorySet {
+  projects: ProjectRepository;
   tasks: TaskRepository;
   dependencies: DependencyRepository;
   tags: TagRepository;

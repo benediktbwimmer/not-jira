@@ -129,9 +129,10 @@ export function assertNoCycle(taskId: string, dependsOnTaskId: string, dependenc
 
 export function assertDependencySetHasNoCycle(taskId: string, dependencyIds: string[], dependencies: Dependency[]): void {
   const remaining = dependencies.filter((edge) => edge.taskId !== taskId);
+  const projectId = dependencies[0]?.projectId ?? "INTERNAL";
   for (const dependencyId of dependencyIds) {
     assertNoCycle(taskId, dependencyId, remaining);
-    remaining.push({ taskId, dependsOnTaskId: dependencyId, createdAt: new Date().toISOString() });
+    remaining.push({ projectId, taskId, dependsOnTaskId: dependencyId, createdAt: new Date().toISOString() });
   }
 }
 
@@ -207,6 +208,19 @@ export function computeTransitiveDependents(tasks: Task[], dependencies: Depende
 export function computeHierarchyRollups(tasks: Task[], statuses: Map<string, ComputedStatus>): Map<string, HierarchyRollup> {
   const hierarchy = buildHierarchyIndexes(tasks);
   const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const activeTaskIds = new Set(tasks.filter((task) => !task.archivedAt).map((task) => task.id));
+  const activeChildrenByParent = new Map<string, string[]>();
+  const activeParentByChild = new Map<string, string | null>();
+  for (const task of tasks) {
+    const parentId = hierarchy.parentByChild.get(task.id) ?? null;
+    const activeParentId = parentId && activeTaskIds.has(task.id) && activeTaskIds.has(parentId) ? parentId : null;
+    activeParentByChild.set(task.id, activeParentId);
+    if (activeParentId) {
+      const children = activeChildrenByParent.get(activeParentId) ?? [];
+      children.push(task.id);
+      activeChildrenByParent.set(activeParentId, children);
+    }
+  }
   const memo = new Map<string, HierarchyRollup>();
   const depthMemo = new Map<string, number>();
   const visiting = new Set<string>();
@@ -215,7 +229,7 @@ export function computeHierarchyRollups(tasks: Task[], statuses: Map<string, Com
     if (depthMemo.has(taskId)) {
       return depthMemo.get(taskId) ?? 0;
     }
-    const parentId = hierarchy.parentByChild.get(taskId) ?? null;
+    const parentId = activeParentByChild.get(taskId) ?? null;
     if (!parentId || !taskById.has(parentId)) {
       depthMemo.set(taskId, 0);
       return 0;
@@ -226,7 +240,7 @@ export function computeHierarchyRollups(tasks: Task[], statuses: Map<string, Com
   };
 
   const emptyFor = (taskId: string): HierarchyRollup => ({
-    childrenCount: hierarchy.childrenByParent.get(taskId)?.length ?? 0,
+    childrenCount: activeChildrenByParent.get(taskId)?.length ?? 0,
     descendantsCount: 0,
     leafDescendantsCount: 0,
     finishedLeafDescendantsCount: 0,
@@ -248,7 +262,7 @@ export function computeHierarchyRollups(tasks: Task[], statuses: Map<string, Com
     }
     visiting.add(taskId);
 
-    const children = hierarchy.childrenByParent.get(taskId) ?? [];
+    const children = activeChildrenByParent.get(taskId) ?? [];
     let rollup = emptyFor(taskId);
 
     if (children.length === 0) {
@@ -280,7 +294,7 @@ export function computeHierarchyRollups(tasks: Task[], statuses: Map<string, Com
       rollup.subtreeStartedCount += childRollup.subtreeStartedCount;
       rollup.subtreeFinishedCount += childRollup.subtreeFinishedCount;
 
-      if ((hierarchy.childrenByParent.get(childId) ?? []).length === 0) {
+      if ((activeChildrenByParent.get(childId) ?? []).length === 0) {
         rollup.leafDescendantsCount += 1;
         if (childStatus === "finished") {
           rollup.finishedLeafDescendantsCount += 1;

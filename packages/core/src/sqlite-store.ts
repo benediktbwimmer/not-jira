@@ -7,13 +7,14 @@ import type {
   AppStore,
   DependencyRepository,
   MigrationRepository,
+  ProjectRepository,
   RepositorySet,
   TagRepository,
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Lifecycle, Migration, Priority, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
-import { defaultNotJiraDbPath, nowIso } from "./types.js";
+import type { Activity, Dependency, Lifecycle, Migration, Priority, Project, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
+import { defaultUnblockDbPath, nowIso } from "./types.js";
 
 type SqliteDatabase = Database.Database;
 
@@ -23,6 +24,7 @@ export interface SqliteStoreOptions {
 }
 
 interface TaskRow {
+  project_id: string;
   id: string;
   parent_task_id: string | null;
   title: string;
@@ -45,12 +47,14 @@ interface TaskRow {
 }
 
 interface DependencyRow {
+  project_id: string;
   task_id: string;
   depends_on_task_id: string;
   created_at: string;
 }
 
 interface TagRow {
+  project_id: string;
   id: string;
   name: string;
   color: string | null;
@@ -62,13 +66,16 @@ interface TagRow {
 }
 
 interface TaskTagRow {
+  project_id: string;
   task_id: string;
   tag_id: string;
   created_at: string;
 }
 
 interface TrackRow {
+  project_id: string;
   id: string;
+  machine: string;
   actor: string;
   name: string | null;
   created_at: string;
@@ -77,6 +84,7 @@ interface TrackRow {
 }
 
 interface AssignmentRow {
+  project_id: string;
   track_id: string;
   task_id: string;
   position: string;
@@ -84,13 +92,15 @@ interface AssignmentRow {
 }
 
 interface ActivityRow {
+  project_id: string | null;
   id: string;
   type: string;
   subject_type: Activity["subjectType"];
   subject_id: string | null;
   message: string;
   data_json: string;
-  actor: string | null;
+  machine: string;
+  actor: string;
   created_at: string;
 }
 
@@ -100,7 +110,17 @@ interface MigrationRow {
   applied_at: string;
 }
 
+interface ProjectRow {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
 export class SqliteStore implements AppStore {
+  readonly projects: ProjectRepository;
   readonly tasks: TaskRepository;
   readonly dependencies: DependencyRepository;
   readonly tags: TagRepository;
@@ -115,6 +135,7 @@ export class SqliteStore implements AppStore {
     if (options.autoMigrate ?? true) {
       runEmbeddedMigrations(this.db);
     }
+    this.projects = new SqliteProjectRepository(this.db);
     this.tasks = new SqliteTaskRepository(this.db);
     this.dependencies = new SqliteDependencyRepository(this.db);
     this.tags = new SqliteTagRepository(this.db);
@@ -145,32 +166,62 @@ export class SqliteStore implements AppStore {
 }
 
 export function createSqliteStore(options: SqliteStoreOptions = {}): SqliteStore {
-  const databasePath = options.databasePath ?? process.env.NOT_JIRA_DB ?? defaultNotJiraDbPath();
+  const databasePath = options.databasePath ?? process.env.UNBLOCK_DB ?? defaultUnblockDbPath();
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new Database(databasePath);
   return new SqliteStore(db, options);
 }
 
+class SqliteProjectRepository implements ProjectRepository {
+  constructor(private readonly db: SqliteDatabase) {}
+
+  async list(): Promise<Project[]> {
+    return this.db.prepare("select * from projects order by name asc, id asc").all().map((row) => projectFromRow(row as ProjectRow));
+  }
+
+  async get(id: string): Promise<Project | null> {
+    const row = this.db.prepare("select * from projects where id = ?").get(id) as ProjectRow | undefined;
+    return row ? projectFromRow(row) : null;
+  }
+
+  async create(project: Project): Promise<void> {
+    this.db.prepare(`
+      insert into projects (id, name, description, created_at, updated_at, archived_at)
+      values (@id, @name, @description, @createdAt, @updatedAt, @archivedAt)
+    `).run(project);
+  }
+
+  async update(project: Project): Promise<void> {
+    this.db.prepare(`
+      update projects set name = @name, description = @description, updated_at = @updatedAt, archived_at = @archivedAt
+      where id = @id
+    `).run(project);
+  }
+}
+
 class SqliteTaskRepository implements TaskRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async list(): Promise<Task[]> {
-    return this.db.prepare("select * from tasks order by created_at asc, id asc").all().map((row) => taskFromRow(row as TaskRow));
+  async list(projectId?: string): Promise<Task[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from tasks where project_id = ? order by created_at asc, id asc").all(projectId)
+      : this.db.prepare("select * from tasks order by project_id asc, created_at asc, id asc").all();
+    return rows.map((row) => taskFromRow(row as TaskRow));
   }
 
-  async get(id: string): Promise<Task | null> {
-    const row = this.db.prepare("select * from tasks where id = ?").get(id) as TaskRow | undefined;
+  async get(projectId: string, id: string): Promise<Task | null> {
+    const row = this.db.prepare("select * from tasks where project_id = ? and id = ?").get(projectId, id) as TaskRow | undefined;
     return row ? taskFromRow(row) : null;
   }
 
   async create(task: Task): Promise<void> {
     this.db.prepare(`
       insert into tasks (
-        id, parent_task_id, title, description, lifecycle, priority, size, source_doc, source_section,
+        project_id, id, parent_task_id, title, description, lifecycle, priority, size, source_doc, source_section,
         source_anchor, source_line, source_text, completion_bar, created_at, updated_at,
         started_at, finished_at, archived_at, version
       ) values (
-        @id, @parentTaskId, @title, @description, @lifecycle, @priority, @size, @sourceDoc, @sourceSection,
+        @projectId, @id, @parentTaskId, @title, @description, @lifecycle, @priority, @size, @sourceDoc, @sourceSection,
         @sourceAnchor, @sourceLine, @sourceText, @completionBar, @createdAt, @updatedAt,
         @startedAt, @finishedAt, @archivedAt, @version
       )
@@ -197,41 +248,44 @@ class SqliteTaskRepository implements TaskRepository {
         finished_at = @finishedAt,
         archived_at = @archivedAt,
         version = @version
-      where id = @id
+      where project_id = @projectId and id = @id
     `).run(task);
   }
 
-  async delete(id: string): Promise<void> {
-    this.db.prepare("delete from tasks where id = ?").run(id);
+  async delete(projectId: string, id: string): Promise<void> {
+    this.db.prepare("delete from tasks where project_id = ? and id = ?").run(projectId, id);
   }
 }
 
 class SqliteDependencyRepository implements DependencyRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async list(): Promise<Dependency[]> {
-    return this.db.prepare("select * from task_dependencies order by task_id, depends_on_task_id").all().map((row) => dependencyFromRow(row as DependencyRow));
+  async list(projectId?: string): Promise<Dependency[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from task_dependencies where project_id = ? order by task_id, depends_on_task_id").all(projectId)
+      : this.db.prepare("select * from task_dependencies order by project_id, task_id, depends_on_task_id").all();
+    return rows.map((row) => dependencyFromRow(row as DependencyRow));
   }
 
-  async listForTask(taskId: string): Promise<Dependency[]> {
-    return this.db.prepare("select * from task_dependencies where task_id = ? order by depends_on_task_id").all(taskId).map((row) => dependencyFromRow(row as DependencyRow));
+  async listForTask(projectId: string, taskId: string): Promise<Dependency[]> {
+    return this.db.prepare("select * from task_dependencies where project_id = ? and task_id = ? order by depends_on_task_id").all(projectId, taskId).map((row) => dependencyFromRow(row as DependencyRow));
   }
 
-  async listDependents(dependsOnTaskId: string): Promise<Dependency[]> {
-    return this.db.prepare("select * from task_dependencies where depends_on_task_id = ? order by task_id").all(dependsOnTaskId).map((row) => dependencyFromRow(row as DependencyRow));
+  async listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]> {
+    return this.db.prepare("select * from task_dependencies where project_id = ? and depends_on_task_id = ? order by task_id").all(projectId, dependsOnTaskId).map((row) => dependencyFromRow(row as DependencyRow));
   }
 
   async add(dependency: Dependency): Promise<void> {
-    this.db.prepare("insert or ignore into task_dependencies (task_id, depends_on_task_id, created_at) values (@taskId, @dependsOnTaskId, @createdAt)").run(dependency);
+    this.db.prepare("insert or ignore into task_dependencies (project_id, task_id, depends_on_task_id, created_at) values (@projectId, @taskId, @dependsOnTaskId, @createdAt)").run(dependency);
   }
 
-  async remove(taskId: string, dependsOnTaskId: string): Promise<void> {
-    this.db.prepare("delete from task_dependencies where task_id = ? and depends_on_task_id = ?").run(taskId, dependsOnTaskId);
+  async remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void> {
+    this.db.prepare("delete from task_dependencies where project_id = ? and task_id = ? and depends_on_task_id = ?").run(projectId, taskId, dependsOnTaskId);
   }
 
-  async replaceForTask(taskId: string, dependencies: Dependency[]): Promise<void> {
-    this.db.prepare("delete from task_dependencies where task_id = ?").run(taskId);
-    const insert = this.db.prepare("insert or ignore into task_dependencies (task_id, depends_on_task_id, created_at) values (@taskId, @dependsOnTaskId, @createdAt)");
+  async replaceForTask(projectId: string, taskId: string, dependencies: Dependency[]): Promise<void> {
+    this.db.prepare("delete from task_dependencies where project_id = ? and task_id = ?").run(projectId, taskId);
+    const insert = this.db.prepare("insert or ignore into task_dependencies (project_id, task_id, depends_on_task_id, created_at) values (@projectId, @taskId, @dependsOnTaskId, @createdAt)");
     for (const dependency of dependencies) {
       insert.run(dependency);
     }
@@ -241,24 +295,27 @@ class SqliteDependencyRepository implements DependencyRepository {
 class SqliteTagRepository implements TagRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async list(): Promise<Tag[]> {
-    return this.db.prepare("select * from tags order by sort_order asc, name asc").all().map((row) => tagFromRow(row as TagRow));
+  async list(projectId?: string): Promise<Tag[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from tags where project_id = ? order by sort_order asc, name asc").all(projectId)
+      : this.db.prepare("select * from tags order by project_id, sort_order asc, name asc").all();
+    return rows.map((row) => tagFromRow(row as TagRow));
   }
 
-  async get(id: string): Promise<Tag | null> {
-    const row = this.db.prepare("select * from tags where id = ?").get(id) as TagRow | undefined;
+  async get(projectId: string, id: string): Promise<Tag | null> {
+    const row = this.db.prepare("select * from tags where project_id = ? and id = ?").get(projectId, id) as TagRow | undefined;
     return row ? tagFromRow(row) : null;
   }
 
-  async findByName(name: string): Promise<Tag | null> {
-    const row = this.db.prepare("select * from tags where name = ?").get(name) as TagRow | undefined;
+  async findByName(projectId: string, name: string): Promise<Tag | null> {
+    const row = this.db.prepare("select * from tags where project_id = ? and name = ?").get(projectId, name) as TagRow | undefined;
     return row ? tagFromRow(row) : null;
   }
 
   async create(tag: Tag): Promise<void> {
     this.db.prepare(`
-      insert into tags (id, name, color, description, sort_order, created_at, updated_at, archived_at)
-      values (@id, @name, @color, @description, @sortOrder, @createdAt, @updatedAt, @archivedAt)
+      insert into tags (project_id, id, name, color, description, sort_order, created_at, updated_at, archived_at)
+      values (@projectId, @id, @name, @color, @description, @sortOrder, @createdAt, @updatedAt, @archivedAt)
     `).run(tag);
   }
 
@@ -271,79 +328,91 @@ class SqliteTagRepository implements TagRepository {
         sort_order = @sortOrder,
         updated_at = @updatedAt,
         archived_at = @archivedAt
-      where id = @id
+      where project_id = @projectId and id = @id
     `).run(tag);
   }
 
-  async listTaskTags(): Promise<TaskTag[]> {
-    return this.db.prepare("select * from task_tags order by task_id, tag_id").all().map((row) => taskTagFromRow(row as TaskTagRow));
+  async listTaskTags(projectId?: string): Promise<TaskTag[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from task_tags where project_id = ? order by task_id, tag_id").all(projectId)
+      : this.db.prepare("select * from task_tags order by project_id, task_id, tag_id").all();
+    return rows.map((row) => taskTagFromRow(row as TaskTagRow));
   }
 
   async addTaskTag(taskTag: TaskTag): Promise<void> {
-    this.db.prepare("insert or ignore into task_tags (task_id, tag_id, created_at) values (@taskId, @tagId, @createdAt)").run(taskTag);
+    this.db.prepare("insert or ignore into task_tags (project_id, task_id, tag_id, created_at) values (@projectId, @taskId, @tagId, @createdAt)").run(taskTag);
   }
 
-  async removeTaskTag(taskId: string, tagId: string): Promise<void> {
-    this.db.prepare("delete from task_tags where task_id = ? and tag_id = ?").run(taskId, tagId);
+  async removeTaskTag(projectId: string, taskId: string, tagId: string): Promise<void> {
+    this.db.prepare("delete from task_tags where project_id = ? and task_id = ? and tag_id = ?").run(projectId, taskId, tagId);
   }
 }
 
 class SqliteTrackRepository implements TrackRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async list(): Promise<Track[]> {
-    return this.db.prepare("select * from tracks order by actor asc").all().map((row) => trackFromRow(row as TrackRow));
+  async list(projectId?: string): Promise<Track[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from tracks where project_id = ? order by machine asc, actor asc").all(projectId)
+      : this.db.prepare("select * from tracks order by project_id, machine asc, actor asc").all();
+    return rows.map((row) => trackFromRow(row as TrackRow));
   }
 
-  async get(id: string): Promise<Track | null> {
-    const row = this.db.prepare("select * from tracks where id = ?").get(id) as TrackRow | undefined;
+  async get(projectId: string, id: string): Promise<Track | null> {
+    const row = this.db.prepare("select * from tracks where project_id = ? and id = ?").get(projectId, id) as TrackRow | undefined;
     return row ? trackFromRow(row) : null;
   }
 
-  async findByActor(actor: string): Promise<Track | null> {
-    const row = this.db.prepare("select * from tracks where actor = ?").get(actor) as TrackRow | undefined;
+  async findByActor(projectId: string, machine: string, actor: string): Promise<Track | null> {
+    const row = this.db.prepare("select * from tracks where project_id = ? and machine = ? and actor = ?").get(projectId, machine, actor) as TrackRow | undefined;
     return row ? trackFromRow(row) : null;
   }
 
   async create(track: Track): Promise<void> {
     this.db.prepare(`
-      insert into tracks (id, actor, name, created_at, updated_at, archived_at)
-      values (@id, @actor, @name, @createdAt, @updatedAt, @archivedAt)
+      insert into tracks (project_id, id, machine, actor, name, created_at, updated_at, archived_at)
+      values (@projectId, @id, @machine, @actor, @name, @createdAt, @updatedAt, @archivedAt)
     `).run(track);
   }
 
   async update(track: Track): Promise<void> {
-    this.db.prepare("update tracks set actor = @actor, name = @name, updated_at = @updatedAt, archived_at = @archivedAt where id = @id").run(track);
+    this.db.prepare("update tracks set machine = @machine, actor = @actor, name = @name, updated_at = @updatedAt, archived_at = @archivedAt where project_id = @projectId and id = @id").run(track);
   }
 
-  async listAssignments(): Promise<TrackAssignment[]> {
-    return this.db.prepare("select * from track_assignments order by track_id, position").all().map((row) => assignmentFromRow(row as AssignmentRow));
+  async listAssignments(projectId?: string): Promise<TrackAssignment[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from track_assignments where project_id = ? order by track_id, position").all(projectId)
+      : this.db.prepare("select * from track_assignments order by project_id, track_id, position").all();
+    return rows.map((row) => assignmentFromRow(row as AssignmentRow));
   }
 
   async assign(assignment: TrackAssignment): Promise<void> {
-    this.db.prepare("insert into track_assignments (track_id, task_id, position, assigned_at) values (@trackId, @taskId, @position, @assignedAt)").run(assignment);
+    this.db.prepare("insert into track_assignments (project_id, track_id, task_id, position, assigned_at) values (@projectId, @trackId, @taskId, @position, @assignedAt)").run(assignment);
   }
 
-  async unassign(trackId: string, taskId: string): Promise<void> {
-    this.db.prepare("delete from track_assignments where track_id = ? and task_id = ?").run(trackId, taskId);
+  async unassign(projectId: string, trackId: string, taskId: string): Promise<void> {
+    this.db.prepare("delete from track_assignments where project_id = ? and track_id = ? and task_id = ?").run(projectId, trackId, taskId);
   }
 
   async updateAssignment(assignment: TrackAssignment): Promise<void> {
-    this.db.prepare("update track_assignments set position = @position, assigned_at = @assignedAt where track_id = @trackId and task_id = @taskId").run(assignment);
+    this.db.prepare("update track_assignments set position = @position, assigned_at = @assignedAt where project_id = @projectId and track_id = @trackId and task_id = @taskId").run(assignment);
   }
 }
 
 class SqliteActivityRepository implements ActivityRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  async list(limit = 100): Promise<Activity[]> {
-    return this.db.prepare("select * from activity order by created_at desc limit ?").all(limit).map((row) => activityFromRow(row as ActivityRow));
+  async list(projectId: string | null = null, limit = 100): Promise<Activity[]> {
+    const rows = projectId === null
+      ? this.db.prepare("select * from activity order by created_at desc limit ?").all(limit)
+      : this.db.prepare("select * from activity where project_id = ? order by created_at desc limit ?").all(projectId, limit);
+    return rows.map((row) => activityFromRow(row as ActivityRow));
   }
 
   async append(activity: Activity): Promise<void> {
     this.db.prepare(`
-      insert into activity (id, type, subject_type, subject_id, message, data_json, actor, created_at)
-      values (@id, @type, @subjectType, @subjectId, @message, @dataJson, @actor, @createdAt)
+      insert into activity (project_id, id, type, subject_type, subject_id, message, data_json, machine, actor, created_at)
+      values (@projectId, @id, @type, @subjectType, @subjectId, @message, @dataJson, @machine, @actor, @createdAt)
     `).run({ ...activity, dataJson: JSON.stringify(activity.data) });
   }
 }
@@ -389,6 +458,7 @@ function runEmbeddedMigrations(db: SqliteDatabase): void {
 
 function taskFromRow(row: TaskRow): Task {
   return {
+    projectId: row.project_id,
     id: row.id,
     parentTaskId: row.parent_task_id,
     title: row.title,
@@ -413,6 +483,7 @@ function taskFromRow(row: TaskRow): Task {
 
 function dependencyFromRow(row: DependencyRow): Dependency {
   return {
+    projectId: row.project_id,
     taskId: row.task_id,
     dependsOnTaskId: row.depends_on_task_id,
     createdAt: row.created_at
@@ -421,6 +492,7 @@ function dependencyFromRow(row: DependencyRow): Dependency {
 
 function tagFromRow(row: TagRow): Tag {
   return {
+    projectId: row.project_id,
     id: row.id,
     name: row.name,
     color: row.color,
@@ -434,6 +506,7 @@ function tagFromRow(row: TagRow): Tag {
 
 function taskTagFromRow(row: TaskTagRow): TaskTag {
   return {
+    projectId: row.project_id,
     taskId: row.task_id,
     tagId: row.tag_id,
     createdAt: row.created_at
@@ -442,7 +515,9 @@ function taskTagFromRow(row: TaskTagRow): TaskTag {
 
 function trackFromRow(row: TrackRow): Track {
   return {
+    projectId: row.project_id,
     id: row.id,
+    machine: row.machine,
     actor: row.actor,
     name: row.name,
     createdAt: row.created_at,
@@ -453,6 +528,7 @@ function trackFromRow(row: TrackRow): Track {
 
 function assignmentFromRow(row: AssignmentRow): TrackAssignment {
   return {
+    projectId: row.project_id,
     trackId: row.track_id,
     taskId: row.task_id,
     position: row.position,
@@ -462,14 +538,27 @@ function assignmentFromRow(row: AssignmentRow): TrackAssignment {
 
 function activityFromRow(row: ActivityRow): Activity {
   return {
+    projectId: row.project_id,
     id: row.id,
     type: row.type,
     subjectType: row.subject_type,
     subjectId: row.subject_id,
     message: row.message,
     data: JSON.parse(row.data_json) as Record<string, unknown>,
+    machine: row.machine,
     actor: row.actor,
     createdAt: row.created_at
+  };
+}
+
+function projectFromRow(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
   };
 }
 

@@ -15,10 +15,12 @@ import {
 import type { AppStore, RepositorySet } from "./store.js";
 import {
   addTaskSchema,
+  DEFAULT_PROJECT_ID,
   editTaskSchema,
   nowIso,
   normalizeId,
   slugify,
+  type AddProjectInput,
   type Activity,
   type AddTagInput,
   type AddTaskInput,
@@ -31,6 +33,7 @@ import {
   type JsonExport,
   type JsonImportResult,
   type Priority,
+  type Project,
   type RollupStatus,
   type SourceSectionCoverage,
   type Tag,
@@ -48,6 +51,7 @@ import { parseMarkdownTracker } from "./markdown-import.js";
 import { exportMarkdown, exportStoreJson } from "./exporters.js";
 
 export interface Services {
+  projects: ProjectService;
   tasks: TaskService;
   dependencies: DependencyService;
   tags: TagService;
@@ -60,29 +64,35 @@ export interface Services {
 
 export interface ServiceOptions {
   actor?: string | null;
+  machine?: string | null;
+  projectId?: string | null;
 }
 
 export function createServices(store: AppStore, options: ServiceOptions = {}): Services {
-  const activity = new ActivityService(store, options.actor ?? null);
-  const query = new QueryService(store);
-  const tasks = new TaskService(store, activity);
-  const dependencies = new DependencyService(store, activity);
-  const tags = new TagService(store, activity);
-  const tracks = new TrackService(store, activity, query);
-  const imports = new ImportService(store, activity, tasks, tracks);
-  const exports = new ExportService(store);
-  return { tasks, dependencies, tags, tracks, query, imports, exports, activity };
+  const projectId = options.projectId ? normalizeId(options.projectId) : DEFAULT_PROJECT_ID;
+  const activity = new ActivityService(store, options.machine ?? null, options.actor ?? null, projectId);
+  const projects = new ProjectService(store, activity);
+  const query = new QueryService(store, projectId);
+  const tasks = new TaskService(store, activity, projectId);
+  const dependencies = new DependencyService(store, activity, projectId);
+  const tags = new TagService(store, activity, projectId);
+  const tracks = new TrackService(store, activity, query, projectId);
+  const imports = new ImportService(store, activity, tasks, tracks, projectId);
+  const exports = new ExportService(store, projectId);
+  return { projects, tasks, dependencies, tags, tracks, query, imports, exports, activity };
 }
 
-function makeActivity(type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown>, actor: string | null): Activity {
+function makeActivity(projectId: string | null, type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown>, provenance: { machine: string; actor: string }): Activity {
   return {
+    projectId,
     id: randomUUID(),
     type,
     subjectType,
     subjectId,
     message,
     data,
-    actor,
+    machine: provenance.machine,
+    actor: provenance.actor,
     createdAt: nowIso()
   };
 }
@@ -121,21 +131,87 @@ function applyLifecycleTimestamps(task: Task, lifecycle: Task["lifecycle"], now:
 }
 
 export class ActivityService {
-  constructor(private readonly store: AppStore, private readonly actor: string | null) {}
+  constructor(private readonly store: AppStore, private readonly machine: string | null, private readonly actor: string | null, private readonly projectId: string) {}
 
   async record(type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown> = {}): Promise<Activity> {
-    const activity = makeActivity(type, subjectType, subjectId, message, data, this.actor);
+    const activity = this.make(this.projectId, type, subjectType, subjectId, message, data);
     await this.store.activity.append(activity);
     return activity;
   }
 
+  make(projectId: string | null, type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown> = {}): Activity {
+    return makeActivity(projectId, type, subjectType, subjectId, message, data, this.provenance());
+  }
+
+  provenance(): { machine: string; actor: string } {
+    const machine = this.machine?.trim();
+    const actor = this.actor?.trim();
+    if (!machine || !actor) {
+      validation("Machine and actor are required for mutating commands.");
+    }
+    return { machine, actor };
+  }
+
   async list(limit = 100): Promise<Activity[]> {
-    return this.store.activity.list(limit);
+    return this.store.activity.list(this.projectId, limit);
+  }
+}
+
+export class ProjectService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService) {}
+
+  async add(input: AddProjectInput): Promise<Project> {
+    const id = normalizeId(input.id);
+    const now = nowIso();
+    const project: Project = {
+      id,
+      name: input.name?.trim() || id,
+      description: input.description ?? null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    await this.store.transaction(async (repos) => {
+      if (await repos.projects.get(id)) {
+        conflict(`Project already exists: ${id}`);
+      }
+      await repos.projects.create(project);
+      await repos.activity.append(this.activity.make(null, "project.created", "project", id, `Created project ${id}`, { name: project.name }));
+    });
+    return project;
+  }
+
+  async archive(idInput: string): Promise<Project> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const project = await repos.projects.get(id) ?? notFound("project", id);
+      const next = { ...project, archivedAt: now, updatedAt: now };
+      await repos.projects.update(next);
+      await repos.activity.append(this.activity.make(null, "project.archived", "project", id, `Archived project ${id}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<Project> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const project = await repos.projects.get(id) ?? notFound("project", id);
+      const next = { ...project, archivedAt: null, updatedAt: now };
+      await repos.projects.update(next);
+      await repos.activity.append(this.activity.make(null, "project.restored", "project", id, `Restored project ${id}`));
+      return next;
+    });
+  }
+
+  async list(): Promise<Project[]> {
+    return this.store.projects.list();
   }
 }
 
 export class TaskService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService) {}
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly projectId: string) {}
 
   async add(input: AddTaskInput): Promise<Task> {
     const parsed = addTaskSchema.parse(input);
@@ -143,6 +219,7 @@ export class TaskService {
     const parentTaskId = parsed.parentTaskId ? normalizeId(parsed.parentTaskId) : null;
     const now = nowIso();
     const task: Task = {
+      projectId: this.projectId,
       id,
       parentTaskId,
       title: parsed.title,
@@ -165,13 +242,13 @@ export class TaskService {
     };
 
     await this.store.transaction(async (repos) => {
-      if (await repos.tasks.get(task.id)) {
+      if (await repos.tasks.get(this.projectId, task.id)) {
         conflict(`Task already exists: ${task.id}`);
       }
-      const parent = await ensureParentTask(repos, task.id, task.parentTaskId);
+      const parent = await ensureParentTask(repos, this.projectId, task.id, task.parentTaskId);
       ensureFinishedParentDoesNotContainUnfinishedChild(parent, task);
       await repos.tasks.create(task);
-      await repos.activity.append(makeActivity("task.created", "task", task.id, `Created ${task.id}`, { title: task.title }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "task.created", "task", task.id, `Created ${task.id}`, { title: task.title }));
     });
 
     return task;
@@ -181,7 +258,7 @@ export class TaskService {
     const parsed = addTaskSchema.parse(input);
     const id = normalizeId(parsed.id);
     const parentTaskId = parsed.parentTaskId ? normalizeId(parsed.parentTaskId) : null;
-    const existing = await this.store.tasks.get(id);
+    const existing = await this.store.tasks.get(this.projectId, id);
     if (!existing) {
       await this.add({ ...parsed, id });
       return "created";
@@ -214,7 +291,7 @@ export class TaskService {
   }
 
   async get(id: string): Promise<Task> {
-    return (await this.store.tasks.get(normalizeId(id))) ?? notFound("task", id);
+    return (await this.store.tasks.get(this.projectId, normalizeId(id))) ?? notFound("task", id);
   }
 
   async edit(id: string, input: EditTaskInput): Promise<Task> {
@@ -223,10 +300,10 @@ export class TaskService {
     const parentTaskId = Object.hasOwn(parsed, "parentTaskId") ? (parsed.parentTaskId ? normalizeId(parsed.parentTaskId) : null) : undefined;
     const now = nowIso();
     const updated = await this.store.transaction(async (repos) => {
-      const existing = await repos.tasks.get(taskId) ?? notFound("task", taskId);
+      const existing = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
       let parent: Task | null | undefined;
       if (parentTaskId !== undefined) {
-        parent = await ensureParentTask(repos, taskId, parentTaskId);
+        parent = await ensureParentTask(repos, this.projectId, taskId, parentTaskId);
       }
       const lifecycle = parsed.lifecycle ?? existing.lifecycle;
       const withLifecycle = applyLifecycleTimestamps(existing, lifecycle, now);
@@ -247,14 +324,14 @@ export class TaskService {
         version: existing.version + 1
       };
       if (next.parentTaskId && parent === undefined) {
-        parent = await repos.tasks.get(next.parentTaskId) ?? notFound("task", next.parentTaskId);
+        parent = await repos.tasks.get(this.projectId, next.parentTaskId) ?? notFound("task", next.parentTaskId);
       }
       ensureFinishedParentDoesNotContainUnfinishedChild(parent ?? null, next);
       await ensureTaskCanBeFinished(repos, next);
       await repos.tasks.update(next);
-      await repos.activity.append(makeActivity("task.updated", "task", taskId, `Updated ${taskId}`, { input: parsed }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "task.updated", "task", taskId, `Updated ${taskId}`, { input: parsed }));
       if (existing.lifecycle !== next.lifecycle) {
-        await repos.activity.append(makeActivity(`task.${next.lifecycle}`, "task", taskId, `Set ${taskId} ${next.lifecycle}`, { from: existing.lifecycle, to: next.lifecycle }, null));
+        await repos.activity.append(this.activity.make(this.projectId, `task.${next.lifecycle}`, "task", taskId, `Set ${taskId} ${next.lifecycle}`, { from: existing.lifecycle, to: next.lifecycle }));
       }
       return next;
     });
@@ -277,10 +354,33 @@ export class TaskService {
     const taskId = normalizeId(id);
     const now = nowIso();
     return this.store.transaction(async (repos) => {
-      const task = await repos.tasks.get(taskId) ?? notFound("task", taskId);
+      const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
       const updated = { ...task, archivedAt: now, updatedAt: now, version: task.version + 1 };
       await repos.tasks.update(updated);
-      await repos.activity.append(makeActivity("task.archived", "task", taskId, `Archived ${taskId}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "task.archived", "task", taskId, `Archived ${taskId}`));
+      return updated;
+    });
+  }
+
+  async restore(id: string): Promise<Task> {
+    const taskId = normalizeId(id);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
+      if (!task.archivedAt) {
+        return task;
+      }
+      if (task.parentTaskId) {
+        const parent = await repos.tasks.get(this.projectId, task.parentTaskId);
+        if (parent?.archivedAt) {
+          validation("Cannot restore a task while its parent is archived.", { taskId, parentTaskId: parent.id });
+        }
+      }
+      const updated = { ...task, archivedAt: null, updatedAt: now, version: task.version + 1 };
+      const tasks = await repos.tasks.list(this.projectId);
+      validateFinishedParents(tasks.map((candidate) => candidate.id === taskId ? updated : candidate));
+      await repos.tasks.update(updated);
+      await repos.activity.append(this.activity.make(this.projectId, "task.restored", "task", taskId, `Restored ${taskId}`));
       return updated;
     });
   }
@@ -288,39 +388,37 @@ export class TaskService {
   async delete(id: string): Promise<void> {
     const taskId = normalizeId(id);
     await this.store.transaction(async (repos) => {
-      const task = await repos.tasks.get(taskId) ?? notFound("task", taskId);
-      const dependents = await repos.dependencies.listDependents(taskId);
+      const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
+      const dependents = await repos.dependencies.listDependents(this.projectId, taskId);
       if (dependents.length > 0) {
         conflict("Cannot hard delete a task with dependents.", { taskId, dependents });
       }
-      await repos.tasks.delete(task.id);
-      await repos.activity.append(makeActivity("task.deleted", "task", taskId, `Deleted ${taskId}`, {}, null));
+      await repos.tasks.delete(this.projectId, task.id);
+      await repos.activity.append(this.activity.make(this.projectId, "task.deleted", "task", taskId, `Deleted ${taskId}`));
     });
   }
 }
 
 export class DependencyService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService) {}
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly projectId: string) {}
 
   async add(taskIdInput: string, dependsOnTaskIdInput: string): Promise<Dependency> {
     const taskId = normalizeId(taskIdInput);
     const dependsOnTaskId = normalizeId(dependsOnTaskIdInput);
     const createdAt = nowIso();
-    const dependency: Dependency = { taskId, dependsOnTaskId, createdAt };
+    const dependency: Dependency = { projectId: this.projectId, taskId, dependsOnTaskId, createdAt };
 
     await this.store.transaction(async (repos) => {
-      await ensureTaskPair(repos, taskId, dependsOnTaskId);
-      const dependencies = await repos.dependencies.list();
-      const tasks = await repos.tasks.list();
+      await ensureTaskPair(repos, this.projectId, taskId, dependsOnTaskId);
+      const dependencies = await repos.dependencies.list(this.projectId);
+      const tasks = await repos.tasks.list(this.projectId);
       assertNoCycle(taskId, dependsOnTaskId, dependencies);
-      if (isDescendant(taskId, dependsOnTaskId, tasks)) {
-        validation("A task cannot depend on one of its descendants in V1.", { taskId, dependsOnTaskId });
-      }
+      assertNoHierarchyDependency(taskId, dependsOnTaskId, tasks);
       if (dependencies.some((edge) => edge.taskId === taskId && edge.dependsOnTaskId === dependsOnTaskId)) {
         return;
       }
       await repos.dependencies.add(dependency);
-      await repos.activity.append(makeActivity("dependency.added", "task", taskId, `${taskId} now depends on ${dependsOnTaskId}`, { taskId, dependsOnTaskId }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "dependency.added", "task", taskId, `${taskId} now depends on ${dependsOnTaskId}`, { taskId, dependsOnTaskId }));
     });
 
     return dependency;
@@ -330,8 +428,8 @@ export class DependencyService {
     const taskId = normalizeId(taskIdInput);
     const dependsOnTaskId = normalizeId(dependsOnTaskIdInput);
     await this.store.transaction(async (repos) => {
-      await repos.dependencies.remove(taskId, dependsOnTaskId);
-      await repos.activity.append(makeActivity("dependency.removed", "task", taskId, `${taskId} no longer depends on ${dependsOnTaskId}`, { taskId, dependsOnTaskId }, null));
+      await repos.dependencies.remove(this.projectId, taskId, dependsOnTaskId);
+      await repos.activity.append(this.activity.make(this.projectId, "dependency.removed", "task", taskId, `${taskId} no longer depends on ${dependsOnTaskId}`, { taskId, dependsOnTaskId }));
     });
   }
 
@@ -339,44 +437,43 @@ export class DependencyService {
     const taskId = normalizeId(taskIdInput);
     const dependencyIds = [...new Set(dependencyIdsInput.map(normalizeId))];
     const createdAt = nowIso();
-    const dependencies = dependencyIds.map((dependsOnTaskId) => ({ taskId, dependsOnTaskId, createdAt }));
+    const dependencies = dependencyIds.map((dependsOnTaskId) => ({ projectId: this.projectId, taskId, dependsOnTaskId, createdAt }));
 
     await this.store.transaction(async (repos) => {
-      if (!await repos.tasks.get(taskId)) {
+      if (!await repos.tasks.get(this.projectId, taskId)) {
         notFound("task", taskId);
       }
       for (const dependsOnTaskId of dependencyIds) {
-        const dependencyTask = await repos.tasks.get(dependsOnTaskId) ?? notFound("task", dependsOnTaskId);
+        const dependencyTask = await repos.tasks.get(this.projectId, dependsOnTaskId) ?? notFound("task", dependsOnTaskId);
         if (dependencyTask.archivedAt) {
           validation("Archived tasks cannot be dependencies in V1.", { dependsOnTaskId });
         }
       }
-      const allDependencies = await repos.dependencies.list();
-      const tasks = await repos.tasks.list();
+      const allDependencies = await repos.dependencies.list(this.projectId);
+      const tasks = await repos.tasks.list(this.projectId);
       assertDependencySetHasNoCycle(taskId, dependencyIds, allDependencies);
       for (const dependsOnTaskId of dependencyIds) {
-        if (isDescendant(taskId, dependsOnTaskId, tasks)) {
-          validation("A task cannot depend on one of its descendants in V1.", { taskId, dependsOnTaskId });
-        }
+        assertNoHierarchyDependency(taskId, dependsOnTaskId, tasks);
       }
-      await repos.dependencies.replaceForTask(taskId, dependencies);
-      await repos.activity.append(makeActivity("dependency.set", "task", taskId, `Set dependencies for ${taskId}`, { dependencyIds }, null));
+      await repos.dependencies.replaceForTask(this.projectId, taskId, dependencies);
+      await repos.activity.append(this.activity.make(this.projectId, "dependency.set", "task", taskId, `Set dependencies for ${taskId}`, { dependencyIds }));
     });
 
     return dependencies;
   }
 
   async list(taskIdInput: string): Promise<Dependency[]> {
-    return this.store.dependencies.listForTask(normalizeId(taskIdInput));
+    return this.store.dependencies.listForTask(this.projectId, normalizeId(taskIdInput));
   }
 }
 
 export class TagService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService) {}
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly projectId: string) {}
 
   async add(input: AddTagInput): Promise<Tag> {
     const now = nowIso();
     const tag: Tag = {
+      projectId: this.projectId,
       id: input.id ? normalizeId(input.id) : slugify(input.name),
       name: input.name.trim(),
       color: input.color ?? null,
@@ -390,14 +487,14 @@ export class TagService {
       validation("Tag name is required.");
     }
     await this.store.transaction(async (repos) => {
-      if (await repos.tags.get(tag.id)) {
+      if (await repos.tags.get(this.projectId, tag.id)) {
         conflict(`Tag already exists: ${tag.id}`);
       }
-      if (await repos.tags.findByName(tag.name)) {
+      if (await repos.tags.findByName(this.projectId, tag.name)) {
         conflict(`Tag name already exists: ${tag.name}`);
       }
       await repos.tags.create(tag);
-      await repos.activity.append(makeActivity("tag.created", "tag", tag.id, `Created tag ${tag.name}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "tag.created", "tag", tag.id, `Created tag ${tag.name}`));
     });
     return tag;
   }
@@ -406,7 +503,7 @@ export class TagService {
     const tagId = normalizeId(id);
     const now = nowIso();
     return this.store.transaction(async (repos) => {
-      const existing = await repos.tags.get(tagId) ?? notFound("tag", tagId);
+      const existing = await repos.tags.get(this.projectId, tagId) ?? notFound("tag", tagId);
       const next: Tag = {
         ...existing,
         name: input.name?.trim() ?? existing.name,
@@ -416,7 +513,7 @@ export class TagService {
         updatedAt: now
       };
       await repos.tags.update(next);
-      await repos.activity.append(makeActivity("tag.updated", "tag", tagId, `Updated tag ${next.name}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "tag.updated", "tag", tagId, `Updated tag ${next.name}`));
       return next;
     });
   }
@@ -425,10 +522,10 @@ export class TagService {
     const tagId = normalizeId(id);
     const now = nowIso();
     return this.store.transaction(async (repos) => {
-      const tag = await repos.tags.get(tagId) ?? notFound("tag", tagId);
+      const tag = await repos.tags.get(this.projectId, tagId) ?? notFound("tag", tagId);
       const next = { ...tag, archivedAt: now, updatedAt: now };
       await repos.tags.update(next);
-      await repos.activity.append(makeActivity("tag.archived", "tag", tagId, `Archived tag ${tag.name}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "tag.archived", "tag", tagId, `Archived tag ${tag.name}`));
       return next;
     });
   }
@@ -437,58 +534,58 @@ export class TagService {
     const taskId = normalizeId(taskIdInput);
     const createdAt = nowIso();
     await this.store.transaction(async (repos) => {
-      await repos.tasks.get(taskId) ?? notFound("task", taskId);
+      await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
       for (const tagIdOrName of tagIdsOrNames) {
-        const tag = await repos.tags.get(normalizeId(tagIdOrName)) ?? await repos.tags.findByName(tagIdOrName) ?? notFound("tag", tagIdOrName);
+        const tag = await repos.tags.get(this.projectId, normalizeId(tagIdOrName)) ?? await repos.tags.findByName(this.projectId, tagIdOrName) ?? notFound("tag", tagIdOrName);
         if (tag.archivedAt) {
           validation("Archived tags cannot be assigned.", { tagId: tag.id });
         }
-        await repos.tags.addTaskTag({ taskId, tagId: tag.id, createdAt });
+        await repos.tags.addTaskTag({ projectId: this.projectId, taskId, tagId: tag.id, createdAt });
       }
-      await repos.activity.append(makeActivity("tag.assigned", "task", taskId, `Assigned tags to ${taskId}`, { tags: tagIdsOrNames }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "tag.assigned", "task", taskId, `Assigned tags to ${taskId}`, { tags: tagIdsOrNames }));
     });
   }
 
   async remove(taskIdInput: string, tagIdOrName: string): Promise<void> {
     const taskId = normalizeId(taskIdInput);
     await this.store.transaction(async (repos) => {
-      const tag = await repos.tags.get(normalizeId(tagIdOrName)) ?? await repos.tags.findByName(tagIdOrName) ?? notFound("tag", tagIdOrName);
-      await repos.tags.removeTaskTag(taskId, tag.id);
-      await repos.activity.append(makeActivity("tag.removed", "task", taskId, `Removed tag ${tag.name} from ${taskId}`, { tagId: tag.id }, null));
+      const tag = await repos.tags.get(this.projectId, normalizeId(tagIdOrName)) ?? await repos.tags.findByName(this.projectId, tagIdOrName) ?? notFound("tag", tagIdOrName);
+      await repos.tags.removeTaskTag(this.projectId, taskId, tag.id);
+      await repos.activity.append(this.activity.make(this.projectId, "tag.removed", "task", taskId, `Removed tag ${tag.name} from ${taskId}`, { tagId: tag.id }));
     });
   }
 
   async list(): Promise<Tag[]> {
-    return this.store.tags.list();
+    return this.store.tags.list(this.projectId);
   }
 }
 
 export class TrackService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService) {}
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
 
   async add(input: AddTrackInput): Promise<Track> {
     const now = nowIso();
-    const actor = input.actor.trim();
-    if (!actor) {
-      validation("Actor is required.");
-    }
+    const provenance = this.activity.provenance();
+    const identity = parseActorRef(input.machine ? `${input.machine}:${input.actor}` : input.actor, provenance.machine);
     const track: Track = {
-      id: input.id ? normalizeId(input.id) : slugify(actor),
-      actor,
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : slugify(`${identity.machine}:${identity.actor}`),
+      machine: identity.machine,
+      actor: identity.actor,
       name: input.name ?? null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null
     };
     await this.store.transaction(async (repos) => {
-      if (await repos.tracks.get(track.id)) {
+      if (await repos.tracks.get(this.projectId, track.id)) {
         conflict(`Track already exists: ${track.id}`);
       }
-      if (await repos.tracks.findByActor(actor)) {
-        conflict(`Track actor already exists: ${actor}`);
+      if (await repos.tracks.findByActor(this.projectId, identity.machine, identity.actor)) {
+        conflict(`Track actor already exists: ${formatActorRef(identity)}`);
       }
       await repos.tracks.create(track);
-      await repos.activity.append(makeActivity("track.created", "track", track.id, `Created actor queue ${actor}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "track.created", "track", track.id, `Created actor queue ${formatActorRef(track)}`));
     });
     return track;
   }
@@ -496,10 +593,10 @@ export class TrackService {
   async rename(actorOrId: string, name: string): Promise<Track> {
     const now = nowIso();
     return this.store.transaction(async (repos) => {
-      const track = await findTrack(repos, actorOrId);
+      const track = await findTrack(repos, this.projectId, actorOrId, this.activity.provenance().machine);
       const next = { ...track, name, updatedAt: now };
       await repos.tracks.update(next);
-      await repos.activity.append(makeActivity("track.renamed", "track", track.id, `Renamed actor queue ${track.actor}`, { name }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "track.renamed", "track", track.id, `Renamed actor queue ${formatActorRef(track)}`, { name }));
       return next;
     });
   }
@@ -507,10 +604,10 @@ export class TrackService {
   async archive(actorOrId: string): Promise<Track> {
     const now = nowIso();
     return this.store.transaction(async (repos) => {
-      const track = await findTrack(repos, actorOrId);
+      const track = await findTrack(repos, this.projectId, actorOrId, this.activity.provenance().machine);
       const next = { ...track, archivedAt: now, updatedAt: now };
       await repos.tracks.update(next);
-      await repos.activity.append(makeActivity("track.archived", "track", track.id, `Archived actor queue ${track.actor}`, {}, null));
+      await repos.activity.append(this.activity.make(this.projectId, "track.archived", "track", track.id, `Archived actor queue ${formatActorRef(track)}`));
       return next;
     });
   }
@@ -519,8 +616,8 @@ export class TrackService {
     const taskId = normalizeId(taskIdInput);
     const assignedAt = nowIso();
     return this.store.transaction(async (repos) => {
-      const track = await findTrack(repos, actorOrId);
-      const task = await repos.tasks.get(taskId) ?? notFound("task", taskId);
+      const track = await findTrack(repos, this.projectId, actorOrId, this.activity.provenance().machine);
+      const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
       if (track.archivedAt) {
         validation("Archived tracks cannot receive assignments.", { trackId: track.id });
       }
@@ -530,15 +627,15 @@ export class TrackService {
       if (task.lifecycle === "finished") {
         validation("Finished tasks cannot be assigned.", { taskId });
       }
-      const assignments = await repos.tracks.listAssignments();
+      const assignments = await repos.tracks.listAssignments(this.projectId);
       if (assignments.some((assignment) => assignment.taskId === taskId)) {
         conflict("Task is already assigned to an actor queue.", { taskId });
       }
       const trackAssignments = assignments.filter((assignment) => assignment.trackId === track.id);
       const position = String(trackAssignments.length + 1).padStart(6, "0");
-      const assignment = { trackId: track.id, taskId, position, assignedAt };
+      const assignment = { projectId: this.projectId, trackId: track.id, taskId, position, assignedAt };
       await repos.tracks.assign(assignment);
-      await repos.activity.append(makeActivity("track.assigned", "track", track.id, `Assigned ${taskId} to ${track.actor}`, { taskId, actor: track.actor }, null));
+      await repos.activity.append(this.activity.make(this.projectId, "track.assigned", "track", track.id, `Assigned ${taskId} to ${formatActorRef(track)}`, { taskId, machine: track.machine, actor: track.actor }));
       return assignment;
     });
   }
@@ -546,36 +643,38 @@ export class TrackService {
   async unassign(actorOrId: string, taskIdInput: string): Promise<void> {
     const taskId = normalizeId(taskIdInput);
     await this.store.transaction(async (repos) => {
-      const track = await findTrack(repos, actorOrId);
-      await repos.tracks.unassign(track.id, taskId);
-      await repos.activity.append(makeActivity("track.unassigned", "track", track.id, `Unassigned ${taskId} from ${track.actor}`, { taskId }, null));
+      const track = await findTrack(repos, this.projectId, actorOrId, this.activity.provenance().machine);
+      await repos.tracks.unassign(this.projectId, track.id, taskId);
+      await repos.activity.append(this.activity.make(this.projectId, "track.unassigned", "track", track.id, `Unassigned ${taskId} from ${formatActorRef(track)}`, { taskId }));
     });
   }
 
   async list(): Promise<Track[]> {
-    return this.store.tracks.list();
+    return this.store.tracks.list(this.projectId);
   }
 }
 
 export class QueryService {
-  constructor(private readonly store: AppStore) {}
+  constructor(private readonly store: AppStore, private readonly projectId: string) {}
 
   async list(filters: TaskListFilters = {}): Promise<TaskView[]> {
     const [tasks, dependencies, tags, taskTags, tracks, assignments] = await Promise.all([
-      this.store.tasks.list(),
-      this.store.dependencies.list(),
-      this.store.tags.list(),
-      this.store.tags.listTaskTags(),
-      this.store.tracks.list(),
-      this.store.tracks.listAssignments()
+      this.store.tasks.list(this.projectId),
+      this.store.dependencies.list(this.projectId),
+      this.store.tags.list(this.projectId),
+      this.store.tags.listTaskTags(this.projectId),
+      this.store.tracks.list(this.projectId),
+      this.store.tracks.listAssignments(this.projectId)
     ]);
 
     const taskById = new Map(tasks.map((task) => [task.id, task]));
     const tagById = new Map(tags.map((tag) => [tag.id, tag]));
     const trackById = new Map(tracks.map((track) => [track.id, track]));
-    const graph = buildGraphIndexes(dependencies);
-    const depths = computeDepths(tasks, dependencies);
-    const transitiveDependents = computeTransitiveDependents(tasks.filter((task) => task.lifecycle !== "finished"), dependencies);
+    const activeTaskIds = new Set(tasks.filter((task) => !task.archivedAt).map((task) => task.id));
+    const activeDependencies = dependencies.filter((dependency) => activeTaskIds.has(dependency.taskId) && activeTaskIds.has(dependency.dependsOnTaskId));
+    const graph = buildGraphIndexes(activeDependencies);
+    const depths = computeDepths(tasks.filter((task) => !task.archivedAt), activeDependencies);
+    const transitiveDependents = computeTransitiveDependents(tasks.filter((task) => !task.archivedAt && task.lifecycle !== "finished"), activeDependencies);
 
     const tagsByTask = new Map<string, Tag[]>();
     for (const taskTag of taskTags) {
@@ -640,7 +739,7 @@ export class QueryService {
         rollupStatus: "leaf",
         unfinishedDescendantsCount: 0,
         criticalChildPath: [],
-        assignedTrack: assignment && track ? { trackId: track.id, actor: track.actor, name: track.name, position: assignment.position } : null,
+        assignedTrack: assignment && track ? { trackId: track.id, machine: track.machine, actor: track.actor, name: track.name, position: assignment.position } : null,
         tags: [...(tagsByTask.get(task.id) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
       };
     });
@@ -671,7 +770,7 @@ export class QueryService {
         unfinishedDescendantsCount
       };
     });
-    const hierarchy = buildHierarchyIndexes(tasks);
+    const hierarchy = buildHierarchyIndexes(tasks.filter((task) => !task.archivedAt));
     const viewById = new Map(views.map((task) => [task.id, task]));
     views = views.map((task) => ({
       ...task,
@@ -688,11 +787,16 @@ export class QueryService {
     const id = normalizeId(idInput);
     const views = await this.list({ includeFinished: true, includeArchived: true });
     const viewById = new Map(views.map((task) => [task.id, task]));
-    const dependencies = await this.store.dependencies.listForTask(id);
-    const allDependencies = await this.store.dependencies.list();
-    const directDependents = allDependencies.filter((dependency) => dependency.dependsOnTaskId === id).map((dependency) => viewById.get(dependency.taskId)).filter((task): task is TaskView => Boolean(task));
+    const dependencies = await this.store.dependencies.listForTask(this.projectId, id);
+    const allDependencies = await this.store.dependencies.list(this.projectId);
+    const directDependents = allDependencies
+      .filter((dependency) => dependency.dependsOnTaskId === id)
+      .map((dependency) => viewById.get(dependency.taskId))
+      .filter((task): task is TaskView => Boolean(task && !task.archivedAt));
     const task = viewById.get(id) ?? notFound("task", id);
-    const dependencyViews = dependencies.map((dependency) => viewById.get(dependency.dependsOnTaskId)).filter((dependency): dependency is TaskView => Boolean(dependency));
+    const dependencyViews = dependencies
+      .map((dependency) => viewById.get(dependency.dependsOnTaskId))
+      .filter((dependency): dependency is TaskView => Boolean(dependency && !dependency.archivedAt));
     const unfinishedDependencies = dependencyViews.filter((dependency) => dependency.lifecycle !== "finished");
     const finishedDependencies = dependencyViews.filter((dependency) => dependency.lifecycle === "finished");
     const assignable = !task.archivedAt && task.lifecycle !== "finished";
@@ -821,11 +925,26 @@ export class QueryService {
       if (filters.tag && !task.tags.some((tag) => tag.id === normalizeId(filters.tag ?? "") || tag.name === filters.tag)) {
         return false;
       }
-      if (filters.assignedActor && task.assignedTrack?.actor !== filters.assignedActor) {
-        return false;
+      if (filters.assignedActor) {
+        const assignedRef = task.assignedTrack ? formatActorRef(task.assignedTrack) : null;
+        if (task.assignedTrack?.actor !== filters.assignedActor && assignedRef !== filters.assignedActor) {
+          return false;
+        }
       }
       if (search) {
-        const haystack = [task.id, task.title, task.description, task.sourceDoc, task.sourceSection, task.sourceText].filter(Boolean).join("\n").toLowerCase();
+        const haystack = [
+          task.id,
+          task.title,
+          task.description,
+          task.sourceDoc,
+          task.sourceSection,
+          task.sourceText,
+          task.assignedTrack ? formatActorRef(task.assignedTrack) : null,
+          task.assignedTrack?.machine,
+          task.assignedTrack?.actor,
+          task.assignedTrack?.name,
+          ...task.tags.flatMap((tag) => [tag.id, tag.name, tag.description])
+        ].filter(Boolean).join("\n").toLowerCase();
         if (!haystack.includes(search)) {
           return false;
         }
@@ -899,7 +1018,8 @@ export class ImportService {
     private readonly store: AppStore,
     private readonly activity: ActivityService,
     private readonly tasks: TaskService,
-    private readonly tracks: TrackService
+    private readonly tracks: TrackService,
+    private readonly projectId: string
   ) {}
 
   async markdown(filePath: string, markdown: string, dryRun = false): Promise<ImportResult> {
@@ -934,14 +1054,16 @@ export class ImportService {
       }
 
       if (importedTask.assignee && importedTask.lifecycle !== "finished") {
-        const existingTrack = await this.store.tracks.findByActor(importedTask.assignee);
+        const identity = parseActorRef(importedTask.assignee, this.activity.provenance().machine);
+        const actorRef = formatActorRef(identity);
+        const existingTrack = await this.store.tracks.findByActor(this.projectId, identity.machine, identity.actor);
         if (!existingTrack) {
-          await this.tracks.add({ actor: importedTask.assignee });
+          await this.tracks.add({ machine: identity.machine, actor: identity.actor });
         }
-        const views = await this.store.tracks.listAssignments();
+        const views = await this.store.tracks.listAssignments(this.projectId);
         if (!views.some((assignment) => assignment.taskId === importedTask.id)) {
           try {
-            await this.tracks.assign(importedTask.assignee, importedTask.id);
+            await this.tracks.assign(actorRef, importedTask.id);
             assigned += 1;
           } catch {
             skipped += 1;
@@ -956,7 +1078,7 @@ export class ImportService {
 
   async json(filePath: string, input: unknown): Promise<JsonImportResult> {
     const now = nowIso();
-    const data = normalizeJsonImport(input, now);
+    const data = scopeJsonExport(normalizeJsonImport(input, now), this.projectId);
     const issues: ImportIssue[] = [];
 
     let tasksCreated = 0;
@@ -971,7 +1093,7 @@ export class ImportService {
     let skipped = 0;
 
     await this.store.transaction(async (repos) => {
-      const existingTasks = await repos.tasks.list();
+      const existingTasks = await repos.tasks.list(this.projectId);
       const existingTaskById = new Map(existingTasks.map((task) => [task.id, task]));
       const importedTaskById = new Map(data.tasks.map((task) => [task.id, task]));
       const combinedTasks = existingTasks.map((task) => importedTaskById.get(task.id) ?? task);
@@ -992,7 +1114,7 @@ export class ImportService {
       }
       validateFinishedParents(combinedTasks);
 
-      const existingDependencies = await repos.dependencies.list();
+      const existingDependencies = await repos.dependencies.list(this.projectId);
       const importedDependencyKeys = new Set(data.dependencies.map((edge) => dependencyKey(edge.taskId, edge.dependsOnTaskId)));
       const combinedDependencies = [
         ...existingDependencies.filter((edge) => !importedDependencyKeys.has(dependencyKey(edge.taskId, edge.dependsOnTaskId))),
@@ -1000,12 +1122,12 @@ export class ImportService {
       ];
       validateDependencyGraph(combinedTasks, combinedDependencies);
 
-      const existingTags = await repos.tags.list();
+      const existingTags = await repos.tags.list(this.projectId);
       const existingTagById = new Map(existingTags.map((tag) => [tag.id, tag]));
-      const existingTracks = await repos.tracks.list();
+      const existingTracks = await repos.tracks.list(this.projectId);
       const existingTrackById = new Map(existingTracks.map((track) => [track.id, track]));
-      const existingTaskTags = new Set((await repos.tags.listTaskTags()).map((taskTag) => taskTagKey(taskTag.taskId, taskTag.tagId)));
-      const existingAssignments = new Map((await repos.tracks.listAssignments()).map((assignment) => [assignment.taskId, assignment]));
+      const existingTaskTags = new Set((await repos.tags.listTaskTags(this.projectId)).map((taskTag) => taskTagKey(taskTag.taskId, taskTag.tagId)));
+      const existingAssignments = new Map((await repos.tracks.listAssignments(this.projectId)).map((assignment) => [assignment.taskId, assignment]));
 
       for (const task of data.tasks) {
         const parentless = { ...task, parentTaskId: null };
@@ -1088,7 +1210,7 @@ export class ImportService {
         assignmentsAdded += 1;
       }
 
-      await repos.activity.append(makeActivity("import.completed", "import", null, `Imported ${filePath}`, {
+      await repos.activity.append(this.activity.make(this.projectId, "import.completed", "import", null, `Imported ${filePath}`, {
         filePath,
         tasksCreated,
         tasksUpdated,
@@ -1101,7 +1223,7 @@ export class ImportService {
         assignmentsAdded,
         skipped,
         issues: issues.length
-      }, null));
+      }));
     });
 
     return {
@@ -1121,14 +1243,14 @@ export class ImportService {
 }
 
 export class ExportService {
-  constructor(private readonly store: AppStore) {}
+  constructor(private readonly store: AppStore, private readonly projectId: string) {}
 
   async json(includeActivity = false): Promise<JsonExport> {
-    return exportStoreJson(this.store, includeActivity);
+    return exportStoreJson(this.store, includeActivity, this.projectId);
   }
 
   async markdown(): Promise<string> {
-    const query = new QueryService(this.store);
+    const query = new QueryService(this.store, this.projectId);
     const [tasks, data] = await Promise.all([
       query.list({ includeFinished: true, includeArchived: true }),
       this.json(false)
@@ -1137,9 +1259,9 @@ export class ExportService {
   }
 }
 
-async function ensureTaskPair(repos: RepositorySet, taskId: string, dependsOnTaskId: string): Promise<void> {
-  const task = await repos.tasks.get(taskId) ?? notFound("task", taskId);
-  const dependency = await repos.tasks.get(dependsOnTaskId) ?? notFound("task", dependsOnTaskId);
+async function ensureTaskPair(repos: RepositorySet, projectId: string, taskId: string, dependsOnTaskId: string): Promise<void> {
+  const task = await repos.tasks.get(projectId, taskId) ?? notFound("task", taskId);
+  const dependency = await repos.tasks.get(projectId, dependsOnTaskId) ?? notFound("task", dependsOnTaskId);
   if (task.archivedAt) {
     validation("Archived tasks cannot have dependencies changed.", { taskId });
   }
@@ -1152,15 +1274,15 @@ function formatCount(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-async function ensureParentTask(repos: RepositorySet, taskId: string, parentTaskId: string | null): Promise<Task | null> {
+async function ensureParentTask(repos: RepositorySet, projectId: string, taskId: string, parentTaskId: string | null): Promise<Task | null> {
   if (!parentTaskId) {
     return null;
   }
-  const parent = await repos.tasks.get(parentTaskId) ?? notFound("task", parentTaskId);
+  const parent = await repos.tasks.get(projectId, parentTaskId) ?? notFound("task", parentTaskId);
   if (parent.archivedAt) {
     validation("Archived tasks cannot be parents in V1.", { taskId, parentTaskId });
   }
-  const tasks = await repos.tasks.list();
+  const tasks = await repos.tasks.list(projectId);
   assertNoParentCycle(taskId, parentTaskId, tasks);
   return parent;
 }
@@ -1178,12 +1300,12 @@ async function ensureTaskCanBeFinished(repos: RepositorySet, task: Task): Promis
   if (task.lifecycle !== "finished") {
     return;
   }
-  const tasks = await repos.tasks.list();
+  const tasks = await repos.tasks.list(task.projectId);
   const taskById = new Map(tasks.map((candidate) => [candidate.id, candidate]));
   taskById.set(task.id, task);
   const unfinishedDescendants = listDescendantIds(task.id, [...taskById.values()])
     .map((descendantId) => taskById.get(descendantId))
-    .filter((candidate): candidate is Task => candidate !== undefined && candidate.lifecycle !== "finished");
+    .filter((candidate): candidate is Task => candidate !== undefined && !candidate.archivedAt && candidate.lifecycle !== "finished");
   if (unfinishedDescendants.length > 0) {
     validation("Parent tasks cannot be finished while descendants are unfinished.", {
       taskId: task.id,
@@ -1198,7 +1320,10 @@ function validateFinishedParents(tasks: Task[]): void {
     if (task.lifecycle !== "finished") {
       continue;
     }
-    const unfinishedDescendantIds = listDescendantIds(task.id, tasks).filter((descendantId) => taskById.get(descendantId)?.lifecycle !== "finished");
+    const unfinishedDescendantIds = listDescendantIds(task.id, tasks).filter((descendantId) => {
+      const descendant = taskById.get(descendantId);
+      return Boolean(descendant && !descendant.archivedAt && descendant.lifecycle !== "finished");
+    });
     if (unfinishedDescendantIds.length > 0) {
       validation("Finished parent tasks cannot contain unfinished descendants.", {
         taskId: task.id,
@@ -1208,8 +1333,29 @@ function validateFinishedParents(tasks: Task[]): void {
   }
 }
 
-async function findTrack(repos: RepositorySet, actorOrId: string): Promise<Track> {
-  return await repos.tracks.get(normalizeId(actorOrId)) ?? await repos.tracks.findByActor(actorOrId) ?? notFound("track", actorOrId);
+async function findTrack(repos: RepositorySet, projectId: string, actorOrId: string, defaultMachine: string): Promise<Track> {
+  const identity = parseActorRef(actorOrId, defaultMachine);
+  return await repos.tracks.get(projectId, normalizeId(actorOrId))
+    ?? await repos.tracks.findByActor(projectId, identity.machine, identity.actor)
+    ?? notFound("track", actorOrId);
+}
+
+function parseActorRef(input: string, defaultMachine: string): { machine: string; actor: string } {
+  const value = input.trim();
+  if (!value) {
+    validation("Actor is required.");
+  }
+  const separator = value.indexOf(":");
+  const machine = separator === -1 ? defaultMachine.trim() : value.slice(0, separator).trim();
+  const actor = separator === -1 ? value : value.slice(separator + 1).trim();
+  if (!machine || !actor) {
+    validation("Actor identity must be actor or machine:actor.", { input });
+  }
+  return { machine, actor };
+}
+
+function formatActorRef(identity: { machine: string; actor: string }): string {
+  return `${identity.machine}:${identity.actor}`;
 }
 
 function normalizeJsonImport(input: unknown, now: string): JsonExport {
@@ -1247,11 +1393,12 @@ function normalizeJsonImport(input: unknown, now: string): JsonExport {
     if (trackIds.has(track.id)) {
       validation("JSON import contains duplicate track ids.", { trackId: track.id });
     }
-    if (actors.has(track.actor)) {
-      validation("JSON import contains duplicate track actors.", { actor: track.actor });
+    const actorKey = formatActorRef(track);
+    if (actors.has(actorKey)) {
+      validation("JSON import contains duplicate track actors.", { actor: actorKey });
     }
     trackIds.add(track.id);
-    actors.add(track.actor);
+    actors.add(actorKey);
   }
 
   return {
@@ -1262,6 +1409,26 @@ function normalizeJsonImport(input: unknown, now: string): JsonExport {
     tracks,
     assignments: ensureArray(record.assignments, "assignments").map((assignment) => normalizeImportedAssignment(assignment, now))
   };
+}
+
+function scopeJsonExport(data: JsonExport, projectId: string): JsonExport {
+  const scoped: JsonExport = {
+    tasks: data.tasks.map((task) => ({ ...task, projectId })),
+    dependencies: data.dependencies.map((dependency) => ({ ...dependency, projectId })),
+    tags: data.tags.map((tag) => ({ ...tag, projectId })),
+    taskTags: data.taskTags.map((taskTag) => ({ ...taskTag, projectId })),
+    tracks: data.tracks.map((track) => ({ ...track, projectId })),
+    assignments: data.assignments.map((assignment) => ({ ...assignment, projectId }))
+  };
+  if (data.activity) {
+    scoped.activity = data.activity.map((activity) => ({
+      ...activity,
+      projectId,
+      machine: activity.machine ?? "unknown-machine",
+      actor: activity.actor ?? "unknown"
+    }));
+  }
+  return scoped;
 }
 
 function normalizeImportedTask(input: unknown, now: string): Task {
@@ -1282,6 +1449,7 @@ function normalizeImportedTask(input: unknown, now: string): Task {
     completionBar: optionalStringField(record, "completionBar")
   });
   return {
+    projectId: DEFAULT_PROJECT_ID,
     id: normalizeId(parsed.id),
     parentTaskId: parsed.parentTaskId ? normalizeId(parsed.parentTaskId) : null,
     title: parsed.title,
@@ -1307,6 +1475,7 @@ function normalizeImportedTask(input: unknown, now: string): Task {
 function normalizeImportedDependency(input: unknown, now: string): Dependency {
   const record = requireRecord(input, "dependency");
   return {
+    projectId: DEFAULT_PROJECT_ID,
     taskId: normalizeId(stringField(record, "taskId")),
     dependsOnTaskId: normalizeId(stringField(record, "dependsOnTaskId")),
     createdAt: optionalStringField(record, "createdAt") ?? now
@@ -1316,6 +1485,7 @@ function normalizeImportedDependency(input: unknown, now: string): Dependency {
 function normalizeImportedTag(input: unknown, now: string): Tag {
   const record = requireRecord(input, "tag");
   return {
+    projectId: DEFAULT_PROJECT_ID,
     id: normalizeId(optionalStringField(record, "id") ?? slugify(stringField(record, "name"))),
     name: stringField(record, "name").trim(),
     color: optionalStringField(record, "color"),
@@ -1330,6 +1500,7 @@ function normalizeImportedTag(input: unknown, now: string): Tag {
 function normalizeImportedTaskTag(input: unknown, now: string): TaskTag {
   const record = requireRecord(input, "taskTag");
   return {
+    projectId: DEFAULT_PROJECT_ID,
     taskId: normalizeId(stringField(record, "taskId")),
     tagId: normalizeId(stringField(record, "tagId")),
     createdAt: optionalStringField(record, "createdAt") ?? now
@@ -1339,8 +1510,11 @@ function normalizeImportedTaskTag(input: unknown, now: string): TaskTag {
 function normalizeImportedTrack(input: unknown, now: string): Track {
   const record = requireRecord(input, "track");
   const actor = stringField(record, "actor").trim();
+  const machine = optionalStringField(record, "machine") ?? "unknown-machine";
   return {
-    id: normalizeId(optionalStringField(record, "id") ?? slugify(actor)),
+    projectId: DEFAULT_PROJECT_ID,
+    id: normalizeId(optionalStringField(record, "id") ?? slugify(`${machine}:${actor}`)),
+    machine,
     actor,
     name: optionalStringField(record, "name"),
     createdAt: optionalStringField(record, "createdAt") ?? now,
@@ -1352,6 +1526,7 @@ function normalizeImportedTrack(input: unknown, now: string): Track {
 function normalizeImportedAssignment(input: unknown, now: string): TrackAssignment {
   const record = requireRecord(input, "assignment");
   return {
+    projectId: DEFAULT_PROJECT_ID,
     trackId: normalizeId(stringField(record, "trackId")),
     taskId: normalizeId(stringField(record, "taskId")),
     position: optionalStringField(record, "position") ?? "000001",
@@ -1378,9 +1553,16 @@ function validateDependencyGraph(tasks: Task[], dependencies: Dependency[]): voi
     }
     seen.add(key);
     assertNoCycle(dependency.taskId, dependency.dependsOnTaskId, dependencies.filter((edge) => dependencyKey(edge.taskId, edge.dependsOnTaskId) !== key));
-    if (isDescendant(dependency.taskId, dependency.dependsOnTaskId, tasks)) {
-      validation("A task cannot depend on one of its descendants in V1.", dependency);
-    }
+    assertNoHierarchyDependency(dependency.taskId, dependency.dependsOnTaskId, tasks);
+  }
+}
+
+function assertNoHierarchyDependency(taskId: string, dependsOnTaskId: string, tasks: Task[]): void {
+  if (isDescendant(taskId, dependsOnTaskId, tasks)) {
+    validation("A task cannot depend on one of its descendants because hierarchy already gates parent completion.", { taskId, dependsOnTaskId });
+  }
+  if (isDescendant(dependsOnTaskId, taskId, tasks)) {
+    validation("A task cannot depend on one of its ancestors because that would deadlock hierarchy completion.", { taskId, dependsOnTaskId });
   }
 }
 

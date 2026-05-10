@@ -1,15 +1,15 @@
 import type { AppStore } from "./store.js";
 import { priorityLabel, type JsonExport, type TaskView } from "./types.js";
 
-export async function exportStoreJson(store: AppStore, includeActivity = false): Promise<JsonExport> {
+export async function exportStoreJson(store: AppStore, includeActivity = false, projectId?: string): Promise<JsonExport> {
   const [tasks, dependencies, tags, taskTags, tracks, assignments, activity] = await Promise.all([
-    store.tasks.list(),
-    store.dependencies.list(),
-    store.tags.list(),
-    store.tags.listTaskTags(),
-    store.tracks.list(),
-    store.tracks.listAssignments(),
-    includeActivity ? store.activity.list(Number.MAX_SAFE_INTEGER) : Promise.resolve(undefined)
+    store.tasks.list(projectId),
+    store.dependencies.list(projectId),
+    store.tags.list(projectId),
+    store.tags.listTaskTags(projectId),
+    store.tracks.list(projectId),
+    store.tracks.listAssignments(projectId),
+    includeActivity ? store.activity.list(projectId ?? null, Number.MAX_SAFE_INTEGER) : Promise.resolve(undefined)
   ]);
   const result: JsonExport = {
     tasks,
@@ -33,7 +33,7 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
   const assignmentByTask = new Map(data.assignments.map((assignment) => [assignment.taskId, assignment]));
   const trackById = new Map(data.tracks.map((track) => [track.id, track]));
   const activeTasks = tasks.filter((task) => !task.archivedAt);
-  const lines: string[] = ["# Not Jira Export", ""];
+  const lines: string[] = ["# Unblock Export", ""];
 
   lines.push("## Summary", "");
   lines.push(`- Tasks: ${tasks.length}`);
@@ -67,7 +67,7 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
     lines.push(`- Priority: ${priorityLabel(task.priority)} (${task.priority})`);
     lines.push(`- Size: ${task.size ?? "none"}`);
     lines.push(`- Parent: ${task.parent ? `${task.parent.id} ${escapeInline(task.parent.title)}` : "root"}`);
-    lines.push(`- Assignment: ${track ? track.actor : "unassigned"}`);
+    lines.push(`- Assignment: ${track ? formatActorRef(track) : "unassigned"}`);
     lines.push(`- Tags: ${tags || "none"}`);
     lines.push(`- Source: ${source}`);
     lines.push(`- Progress: ${task.subtreeProgress}% (${task.finishedLeafDescendantsCount}/${task.leafDescendantsCount} leaf descendants finished)`);
@@ -106,7 +106,7 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
     lines.push("No actor queues.", "");
   } else {
     for (const track of data.tracks) {
-      lines.push(`### ${escapeInline(track.actor)}`, "");
+      lines.push(`### ${escapeInline(formatActorRef(track))}`, "");
       if (track.name) {
         lines.push(`Name: ${escapeInline(track.name)}`, "");
       }
@@ -198,6 +198,10 @@ function formatRollup(task: TaskView): string {
 
 function escapeInline(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function formatActorRef(identity: { machine: string; actor: string }): string {
+  return `${identity.machine}:${identity.actor}`;
 }
 
 function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {

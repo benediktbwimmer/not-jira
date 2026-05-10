@@ -2,32 +2,32 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createMemoryStore, createServices, ensureNotJiraConfig, NotJiraError, readNotJiraConfig } from "./index.js";
+import { createMemoryStore, createServices, ensureUnblockConfig, UnblockError, readUnblockConfig } from "./index.js";
 
-describe("not-jira core services", () => {
+describe("unblock core services", () => {
   it("creates and validates the user config file with safe defaults", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "not-jira-config-"));
+    const dir = await mkdtemp(join(tmpdir(), "unblock-config-"));
     const configPath = join(dir, "config.json");
 
-    const created = await ensureNotJiraConfig(configPath);
+    const created = await ensureUnblockConfig(configPath);
     expect(created.exists).toBe(true);
     expect(created.config.ui.refreshIntervalMs).toBe(5000);
     expect(created.config.ui.persistState).toBe(true);
 
     await writeFile(configPath, JSON.stringify({ ui: { refreshIntervalMs: 2500, persistState: false } }), "utf8");
-    const custom = await readNotJiraConfig(configPath);
+    const custom = await readUnblockConfig(configPath);
     expect(custom.config.ui.refreshIntervalMs).toBe(2500);
     expect(custom.config.ui.persistState).toBe(false);
 
     await writeFile(configPath, JSON.stringify({ ui: { refreshIntervalMs: 10 } }), "utf8");
-    const invalid = await readNotJiraConfig(configPath);
+    const invalid = await readUnblockConfig(configPath);
     expect(invalid.config.ui.refreshIntervalMs).toBe(5000);
     expect(invalid.issues.length).toBeGreaterThan(0);
   });
 
   it("keeps readiness dependency-first while computing hierarchy progress", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({ id: "AUTH", title: "Auth work" });
     await services.tasks.add({ id: "AUTH-001", parentTaskId: "AUTH", title: "Registry" });
@@ -52,7 +52,7 @@ describe("not-jira core services", () => {
 
   it("sorts ready work by downstream unblock count before priority by default", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({ id: "A", title: "Critical root", priority: 2 });
     await services.tasks.add({ id: "B", title: "High standalone", priority: 4 });
@@ -66,34 +66,84 @@ describe("not-jira core services", () => {
     expect(ready[0]?.transitiveDependentsCount).toBe(2);
   });
 
-  it("rejects parent cycles", async () => {
+  it("searches assignments and tags as task metadata", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
-    await services.tasks.add({ id: "A", title: "A" });
-    await services.tasks.add({ id: "B", parentTaskId: "A", title: "B" });
+    await services.tasks.add({ id: "API", title: "API task" });
+    await services.tasks.add({ id: "WEB", title: "Web task" });
+    await services.tags.add({ id: "UX", name: "user experience" });
+    await services.tags.assign("WEB", ["UX"]);
+    await services.tracks.add({ actor: "codex-b", name: "Backend queue" });
+    await services.tracks.assign("codex-b", "API");
 
-    await expect(services.tasks.edit("A", { parentTaskId: "B" })).rejects.toBeInstanceOf(NotJiraError);
+    const assigned = await services.query.list({ search: "codex-b" });
+    const tagged = await services.query.list({ search: "experience" });
+
+    expect(assigned.map((task) => task.id)).toEqual(["API"]);
+    expect(tagged.map((task) => task.id)).toEqual(["WEB"]);
   });
 
-  it("rejects dependencies on descendants to keep hierarchy and readiness clear", async () => {
+  it("rejects parent cycles", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({ id: "A", title: "A" });
     await services.tasks.add({ id: "B", parentTaskId: "A", title: "B" });
 
-    await expect(services.dependencies.add("A", "B")).rejects.toBeInstanceOf(NotJiraError);
+    await expect(services.tasks.edit("A", { parentTaskId: "B" })).rejects.toBeInstanceOf(UnblockError);
+  });
+
+  it("allows dependencies across sibling and unrelated hierarchy branches", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "ROOT-A", title: "Root A" });
+    await services.tasks.add({ id: "ROOT-B", title: "Root B" });
+    await services.tasks.add({ id: "A-1", parentTaskId: "ROOT-A", title: "A child" });
+    await services.tasks.add({ id: "A-2", parentTaskId: "ROOT-A", title: "A sibling" });
+    await services.tasks.add({ id: "B-1", parentTaskId: "ROOT-B", title: "B child" });
+
+    await expect(services.dependencies.add("A-2", "A-1")).resolves.toMatchObject({ taskId: "A-2", dependsOnTaskId: "A-1" });
+    await expect(services.dependencies.add("B-1", "A-1")).resolves.toMatchObject({ taskId: "B-1", dependsOnTaskId: "A-1" });
+  });
+
+  it("rejects hierarchy dependency edges in either direction", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "A", title: "A" });
+    await services.tasks.add({ id: "B", parentTaskId: "A", title: "B" });
+    await services.tasks.add({ id: "C", parentTaskId: "B", title: "C" });
+
+    await expect(services.dependencies.add("A", "B")).rejects.toBeInstanceOf(UnblockError);
+    await expect(services.dependencies.add("C", "A")).rejects.toBeInstanceOf(UnblockError);
+    await expect(services.dependencies.set("A", ["C"])).rejects.toBeInstanceOf(UnblockError);
+    await expect(services.dependencies.set("C", ["A"])).rejects.toBeInstanceOf(UnblockError);
+  });
+
+  it("rejects dependency self-edges and cycles", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "A", title: "A" });
+    await services.tasks.add({ id: "B", title: "B" });
+    await services.tasks.add({ id: "C", title: "C" });
+
+    await expect(services.dependencies.add("A", "A")).rejects.toBeInstanceOf(UnblockError);
+    await services.dependencies.add("B", "A");
+    await services.dependencies.add("C", "B");
+    await expect(services.dependencies.add("A", "C")).rejects.toBeInstanceOf(UnblockError);
   });
 
   it("keeps parents open until descendants are finished without making children dependencies", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({ id: "P", title: "Parent project" });
     await services.tasks.add({ id: "C", parentTaskId: "P", title: "Child task" });
 
-    await expect(services.tasks.finish("P")).rejects.toBeInstanceOf(NotJiraError);
+    await expect(services.tasks.finish("P")).rejects.toBeInstanceOf(UnblockError);
 
     const explanation = await services.query.explain("P");
     expect(explanation.task.computedStatus).toBe("ready");
@@ -109,9 +159,54 @@ describe("not-jira core services", () => {
     await expect(services.tasks.finish("P")).resolves.toMatchObject({ id: "P", lifecycle: "finished" });
   });
 
+  it("treats archived tasks like deleted tasks in active rollups until restored", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "P", title: "Parent project" });
+    await services.tasks.add({ id: "C", parentTaskId: "P", title: "Child task" });
+
+    await services.tasks.archive("C");
+    const afterArchive = await services.query.explain("P");
+    expect(afterArchive.task.childrenCount).toBe(0);
+    expect(afterArchive.task.descendantsCount).toBe(0);
+    expect(afterArchive.task.rollupStatus).toBe("leaf");
+    await expect(services.tasks.finish("P")).resolves.toMatchObject({ id: "P", lifecycle: "finished" });
+
+    await expect(services.tasks.restore("C")).rejects.toBeInstanceOf(UnblockError);
+    await services.tasks.reopen("P");
+    await expect(services.tasks.restore("C")).resolves.toMatchObject({ id: "C", archivedAt: null });
+
+    const afterRestore = await services.query.explain("P");
+    expect(afterRestore.task.childrenCount).toBe(1);
+    expect(afterRestore.task.rollupStatus).toBe("blocked-by-children");
+    expect(afterRestore.task.unfinishedDescendantsCount).toBe(1);
+  });
+
+  it("ignores archived tasks in active dependency scheduling until restored", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "DEP", title: "Dependency" });
+    await services.tasks.add({ id: "WORK", title: "Work" });
+    await services.dependencies.add("WORK", "DEP");
+
+    expect((await services.query.explain("WORK")).task.computedStatus).toBe("blocked");
+
+    await services.tasks.archive("DEP");
+    const afterArchive = await services.query.explain("WORK");
+    expect(afterArchive.task.computedStatus).toBe("ready");
+    expect(afterArchive.task.unfinishedDependenciesCount).toBe(0);
+
+    await services.tasks.restore("DEP");
+    const afterRestore = await services.query.explain("WORK");
+    expect(afterRestore.task.computedStatus).toBe("blocked");
+    expect(afterRestore.task.unfinishedDependenciesCount).toBe(1);
+  });
+
   it("allows assignment when dependencies are unfinished", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({ id: "A", title: "Dependency" });
     await services.tasks.add({ id: "B", title: "Blocked task" });
@@ -127,7 +222,7 @@ describe("not-jira core services", () => {
 
   it("exports markdown as a complete readable graph report", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
 
     await services.tasks.add({
       id: "ROOT",
@@ -156,7 +251,7 @@ describe("not-jira core services", () => {
 
     const markdown = await services.exports.markdown();
 
-    expect(markdown).toContain("# Not Jira Export");
+    expect(markdown).toContain("# Unblock Export");
     expect(markdown).toContain("## Summary");
     expect(markdown).toContain("### `B` Blocked task");
     expect(markdown).toContain("Blocked task description");
@@ -167,14 +262,14 @@ describe("not-jira core services", () => {
     expect(markdown).toContain("- Critical child path: `B` Blocked task [blocked, 1 unfinished deps]");
     expect(markdown).toContain("- Dependencies: `A` Dependency task [ready]");
     expect(markdown).toContain("- `B` Blocked task depends on `A` Dependency task");
-    expect(markdown).toContain("### codex-a");
+    expect(markdown).toContain("### test-machine:codex-a");
     expect(markdown).toContain("- `A` Dependency task [ready]");
     expect(markdown).not.toContain("| Done |");
   });
 
   it("imports a full JSON graph in one service call", async () => {
     const store = createMemoryStore();
-    const services = createServices(store);
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
     const now = "2026-05-02T00:00:00.000Z";
 
     const result = await services.imports.json("fixture.json", {
@@ -257,5 +352,61 @@ describe("not-jira core services", () => {
     const tasks = await services.query.list({ includeFinished: true });
     expect(tasks.find((task) => task.id === "B")?.blocked).toBe(true);
     expect(tasks.find((task) => task.id === "B")?.tags.map((tag) => tag.name)).toEqual(["compiler"]);
+  });
+
+  it("keeps task ids, metadata, and activity scoped by project", async () => {
+    const store = createMemoryStore();
+    const globalServices = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await globalServices.projects.add({ id: "ALPHA", name: "Alpha" });
+    await globalServices.projects.add({ id: "BETA", name: "Beta" });
+
+    const alpha = createServices(store, { projectId: "ALPHA", machine: "test-machine", actor: "test-actor" });
+    const beta = createServices(store, { projectId: "BETA", machine: "test-machine", actor: "test-actor" });
+
+    await alpha.tasks.add({ id: "TASK-1", title: "Alpha task" });
+    await beta.tasks.add({ id: "TASK-1", title: "Beta task" });
+    await alpha.tags.add({ id: "UI", name: "frontend" });
+    await alpha.tags.assign("TASK-1", ["UI"]);
+
+    expect((await alpha.query.list({ includeFinished: true })).map((task) => task.title)).toEqual(["Alpha task"]);
+    expect((await beta.query.list({ includeFinished: true })).map((task) => task.title)).toEqual(["Beta task"]);
+    expect((await beta.tags.list()).map((tag) => tag.id)).toEqual([]);
+    expect((await alpha.activity.list()).map((entry) => entry.projectId)).toEqual(["ALPHA", "ALPHA", "ALPHA"]);
+    expect((await beta.activity.list()).map((entry) => entry.projectId)).toEqual(["BETA"]);
+  });
+
+  it("does not allow dependency wiring across project namespaces", async () => {
+    const store = createMemoryStore();
+    const globalServices = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await globalServices.projects.add({ id: "ALPHA" });
+    await globalServices.projects.add({ id: "BETA" });
+
+    const alpha = createServices(store, { projectId: "ALPHA", machine: "test-machine", actor: "test-actor" });
+    const beta = createServices(store, { projectId: "BETA", machine: "test-machine", actor: "test-actor" });
+
+    await alpha.tasks.add({ id: "DEP", title: "Alpha dependency" });
+    await beta.tasks.add({ id: "WORK", title: "Beta work" });
+
+    await expect(beta.dependencies.add("WORK", "DEP")).rejects.toBeInstanceOf(UnblockError);
+    await expect(alpha.dependencies.add("WORK", "DEP")).rejects.toBeInstanceOf(UnblockError);
+  });
+
+  it("archives and restores projects without affecting other projects", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.projects.add({ id: "ALPHA", name: "Alpha" });
+    await services.projects.add({ id: "BETA", name: "Beta" });
+    await services.projects.archive("ALPHA");
+
+    let projects = await services.projects.list();
+    expect(projects.find((project) => project.id === "ALPHA")?.archivedAt).toEqual(expect.any(String));
+    expect(projects.find((project) => project.id === "BETA")?.archivedAt).toBeNull();
+
+    await services.projects.restore("ALPHA");
+    projects = await services.projects.list();
+    expect(projects.find((project) => project.id === "ALPHA")?.archivedAt).toBeNull();
   });
 });

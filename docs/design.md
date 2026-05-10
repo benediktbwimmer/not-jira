@@ -1,6 +1,6 @@
-# Not Jira Design
+# Unblock Design
 
-Not Jira is a dependency-first project management app for implementation work.
+Unblock is a dependency-first project management app for implementation work.
 
 It is intentionally smaller than Jira, Linear, or GitHub Projects. The core
 idea is that meaningful implementation work is a graph: tasks depend on other
@@ -14,7 +14,7 @@ Postgres, collaboration, auth, and shared deployment.
 ## 1. Product Thesis
 
 Most project management tools are optimized around boards, tickets, status, and
-meetings. Not Jira is optimized around dependency-aware execution:
+meetings. Unblock is optimized around dependency-aware execution:
 
 ```txt
 source document
@@ -206,9 +206,9 @@ Rules:
 - Parent-child containment does not make a parent ready or blocked.
 - Readiness is still computed only from unfinished dependencies.
 - Parent tasks expose computed subtree rollups for progress and navigation.
-- Parent-child containment and dependency edges must not overlap. A parent
-  cannot depend on one of its descendants in V1; if a project needs a terminal
-  gate, model that gate as an explicit child task.
+- Parent-child containment and dependency edges must not overlap in either
+  direction. Ancestor/descendant sequencing is already implied by hierarchy
+  completion rules; model terminal gates as explicit sibling or leaf tasks.
 - A parent cannot be finished while any descendant is unfinished. The parent
   remains open because its contained scope is still open, not because children
   are dependency blockers.
@@ -267,6 +267,9 @@ Rules:
 
 - A task cannot depend on itself.
 - Dependencies cannot create cycles.
+- Dependencies cannot connect tasks in the same hierarchy line. A parent cannot
+  depend on a child or descendant, and a child cannot depend on a parent or
+  ancestor.
 - Finished tasks may still be dependencies.
 - Deleting or archiving a task with dependents requires explicit confirmation.
 - Blocked status is always computed from unfinished dependencies.
@@ -811,18 +814,18 @@ The CLI must expose everything the UI can do.
 Binary name:
 
 ```sh
-not-jira
+unblock
 ```
 
 Configuration:
 
 ```sh
-not-jira --db ./not-jira.sqlite ...
-NOT_JIRA_DB=./not-jira.sqlite
-NOT_JIRA_CONFIG=./config.json
+unblock --db ./unblock.sqlite ...
+UNBLOCK_DB=./unblock.sqlite
+UNBLOCK_CONFIG=./config.json
 ```
 
-The default config path is `~/.not-jira/config.json`. `not-jira serve` should
+The default config path is `~/.unblock/config.json`. `unblock serve` should
 create it with safe defaults if it does not exist:
 
 ```json
@@ -836,7 +839,7 @@ create it with safe defaults if it does not exist:
 
 The server exposes public UI config at `GET /api/config`. Invalid config should
 not crash the app; the server returns defaults plus issue messages, and
-`not-jira doctor` reports the same issues.
+`unblock doctor` reports the same issues.
 
 The web UI persists local view state in browser local storage when
 `ui.persistState` is true. The state key is versioned and stores the active
@@ -848,72 +851,72 @@ refreshed according to `ui.refreshIntervalMs`.
 Task commands:
 
 ```sh
-not-jira task add --id AUTH-001 --title "Add AST capture"
-not-jira task edit AUTH-001 --title "Add TypeScript AST capture"
-not-jira task delete AUTH-001
-not-jira task archive AUTH-001
-not-jira task start AUTH-001
-not-jira task finish AUTH-001
-not-jira task reopen AUTH-001
-not-jira task show AUTH-001
-not-jira task explain AUTH-001
-not-jira task list
-not-jira task list --status ready --sort depth
-not-jira task list --tag compiler --priority-min 3
-not-jira task list --source docs/prism-authoring-language.md
+unblock task add --id AUTH-001 --title "Add AST capture"
+unblock task edit AUTH-001 --title "Add TypeScript AST capture"
+unblock task delete AUTH-001
+unblock task archive AUTH-001
+unblock task start AUTH-001
+unblock task finish AUTH-001
+unblock task reopen AUTH-001
+unblock task show AUTH-001
+unblock task explain AUTH-001
+unblock task list
+unblock task list --status ready --sort depth
+unblock task list --tag compiler --priority-min 3
+unblock task list --source docs/prism-authoring-language.md
 ```
 
-Dependency commands:
+Task dependency commands:
 
 ```sh
-not-jira deps set AUTH-003 AUTH-001 AUTH-002
-not-jira deps add AUTH-003 AUTH-001
-not-jira deps remove AUTH-003 AUTH-001
-not-jira deps list AUTH-003
-not-jira deps graph AUTH-003
+unblock task set-dependencies AUTH-003 --on AUTH-001 AUTH-002
+unblock task depend AUTH-003 --on AUTH-001
+unblock task undepend AUTH-003 --on AUTH-001
+unblock task dependencies AUTH-003
+unblock task explain AUTH-003
 ```
 
 Tag commands:
 
 ```sh
-not-jira tag add compiler --color '#3b82f6'
-not-jira tag edit compiler --description "Compiler work"
-not-jira tag archive compiler
-not-jira tag assign AUTH-001 compiler runtime
-not-jira tag remove AUTH-001 runtime
-not-jira tag list
-not-jira tag tasks compiler
+unblock tag add compiler --color '#3b82f6'
+unblock tag edit compiler --description "Compiler work"
+unblock tag archive compiler
+unblock tag assign AUTH-001 compiler runtime
+unblock tag remove AUTH-001 runtime
+unblock tag list
+unblock tag tasks compiler
 ```
 
 Track commands:
 
 ```sh
-not-jira track add codex-a
-not-jira track rename codex-a "Codex A"
-not-jira track archive codex-a
-not-jira track assign codex-a AUTH-001
-not-jira track unassign codex-a AUTH-001
-not-jira track move codex-a AUTH-001 --before AUTH-003
-not-jira track list
-not-jira track show codex-a
+unblock track add codex-a
+unblock track rename codex-a "Codex A"
+unblock track archive codex-a
+unblock track assign codex-a AUTH-001
+unblock track unassign codex-a AUTH-001
+unblock track move codex-a AUTH-001 --before AUTH-003
+unblock track list
+unblock track show codex-a
 ```
 
 Import/export commands:
 
 ```sh
-not-jira import markdown ~/code/prism-coordination.md
-not-jira import json ./tasks.json
-not-jira export json ./tasks.json
-not-jira export markdown ./tasks.md
+unblock import markdown ~/code/prism-coordination.md
+unblock import json ./tasks.json
+unblock export json ./tasks.json
+unblock export markdown ./tasks.md
 ```
 
 Maintenance commands:
 
 ```sh
-not-jira db init
-not-jira db migrate
-not-jira db status
-not-jira doctor
+unblock db init
+unblock db migrate
+unblock db status
+unblock doctor
 ```
 
 Output formats:
@@ -970,7 +973,7 @@ FUTURE-001
 The importer should allow dry-run:
 
 ```sh
-not-jira import markdown ~/code/prism-coordination.md --dry-run
+unblock import markdown ~/code/prism-coordination.md --dry-run
 ```
 
 ### 11.2 JSON Export
@@ -1060,8 +1063,7 @@ Dependency validation:
 - no cycles
 - dependency task must exist
 - archived dependencies require explicit override or are rejected in V1
-- warn when a task depends on its descendant; reject by default unless an
-  explicit override is added later
+- no parent/child or ancestor/descendant dependency edges in either direction
 
 Assignment validation:
 
@@ -1275,7 +1277,7 @@ V2 non-goals:
 
 ## 18. Product Name
 
-Working name: `not-jira`.
+Working name: `unblock`.
 
 The name should remain a working name until the product shape settles. If shared
 with the community, consider a name that emphasizes dependency-aware execution

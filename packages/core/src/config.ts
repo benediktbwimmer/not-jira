@@ -1,44 +1,75 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { defaultNotJiraConfigPath } from "./types.js";
+import { defaultUnblockConfigPath } from "./types.js";
 
-export const notJiraConfigSchema = z.object({
+export const unblockConfigSchema = z.object({
+  identity: z.object({
+    machine: z.string().trim().max(80).optional(),
+    actor: z.string().trim().max(80).optional()
+  }).optional(),
   ui: z.object({
     refreshIntervalMs: z.number().int().min(1000).max(600000).optional(),
     persistState: z.boolean().optional()
   }).optional()
 }).transform((config) => ({
+  identity: {
+    machine: config.identity?.machine ?? "",
+    actor: config.identity?.actor ?? ""
+  },
   ui: {
     refreshIntervalMs: config.ui?.refreshIntervalMs ?? 5000,
     persistState: config.ui?.persistState ?? true
   }
 }));
 
-export type NotJiraConfig = z.infer<typeof notJiraConfigSchema>;
-export type PublicNotJiraConfig = Pick<NotJiraConfig, "ui">;
+export type UnblockConfig = z.infer<typeof unblockConfigSchema>;
+export type PublicUnblockConfig = Pick<UnblockConfig, "identity" | "ui">;
 
-export interface NotJiraConfigReadResult {
+export interface UnblockConfigReadResult {
   path: string;
   exists: boolean;
-  config: NotJiraConfig;
+  config: UnblockConfig;
   issues: string[];
 }
 
-export function defaultNotJiraConfig(): NotJiraConfig {
-  return notJiraConfigSchema.parse({});
+export function defaultUnblockConfig(): UnblockConfig {
+  return unblockConfigSchema.parse({});
 }
 
-export function publicNotJiraConfig(config: NotJiraConfig): PublicNotJiraConfig {
-  return { ui: config.ui };
+export function publicUnblockConfig(config: UnblockConfig): PublicUnblockConfig {
+  return { identity: config.identity, ui: config.ui };
 }
 
-export async function readNotJiraConfig(configPath = defaultNotJiraConfigPath()): Promise<NotJiraConfigReadResult> {
-  const fallback = defaultNotJiraConfig();
+export async function writeUnblockConfig(config: UnblockConfig, configPath = defaultUnblockConfigPath()): Promise<UnblockConfigReadResult> {
+  const parsed = unblockConfigSchema.parse(config);
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  return { path: configPath, exists: true, config: parsed, issues: [] };
+}
+
+export async function updateUnblockConfig(patch: Partial<UnblockConfig>, configPath = defaultUnblockConfigPath()): Promise<UnblockConfigReadResult> {
+  const current = await readUnblockConfig(configPath);
+  return writeUnblockConfig({
+    ...current.config,
+    ...patch,
+    identity: {
+      ...current.config.identity,
+      ...patch.identity
+    },
+    ui: {
+      ...current.config.ui,
+      ...patch.ui
+    }
+  }, configPath);
+}
+
+export async function readUnblockConfig(configPath = defaultUnblockConfigPath()): Promise<UnblockConfigReadResult> {
+  const fallback = defaultUnblockConfig();
   try {
     const raw = await readFile(configPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-    const result = notJiraConfigSchema.safeParse(parsed);
+    const result = unblockConfigSchema.safeParse(parsed);
     if (!result.success) {
       return {
         path: configPath,
@@ -61,13 +92,13 @@ export async function readNotJiraConfig(configPath = defaultNotJiraConfigPath())
   }
 }
 
-export async function ensureNotJiraConfig(configPath = defaultNotJiraConfigPath()): Promise<NotJiraConfigReadResult> {
-  const result = await readNotJiraConfig(configPath);
+export async function ensureUnblockConfig(configPath = defaultUnblockConfigPath()): Promise<UnblockConfigReadResult> {
+  const result = await readUnblockConfig(configPath);
   if (result.exists) {
     return result;
   }
   await mkdir(dirname(configPath), { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(defaultNotJiraConfig(), null, 2)}\n`, "utf8");
+  await writeFile(configPath, `${JSON.stringify(defaultUnblockConfig(), null, 2)}\n`, "utf8");
   return { ...result, exists: true };
 }
 

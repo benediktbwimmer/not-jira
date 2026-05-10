@@ -1,19 +1,19 @@
 {
-  "name": "@not-jira/cli",
+  "name": "@unblock/cli",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "not-jira": "dist/index.js"
+    "unblock": "dist/index.js"
   },
   "scripts": {
-    "prebuild": "npm run build -w @not-jira/core",
+    "prebuild": "npm run build -w @unblock/core",
     "build": "tsc -p tsconfig.json",
-    "precheck": "npm run build -w @not-jira/core",
+    "precheck": "npm run build -w @unblock/core",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@not-jira/core": "0.1.0",
+    "@unblock/core": "0.1.0",
     "commander": "^14.0.2"
   }
 }

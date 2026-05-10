@@ -1,27 +1,27 @@
-export class NotJiraError extends Error {
+export class UnblockError extends Error {
   readonly code: string;
   readonly details?: unknown;
 
   constructor(code: string, message: string, details?: unknown) {
     super(message);
-    this.name = "NotJiraError";
+    this.name = "UnblockError";
     this.code = code;
     this.details = details;
   }
 }
 
 export function notFound(entity: string, id: string): never {
-  throw new NotJiraError("not_found", `${entity} not found: ${id}`, { entity, id });
+  throw new UnblockError("not_found", `${entity} not found: ${id}`, { entity, id });
 }
 
 export function conflict(message: string, details?: unknown): never {
-  throw new NotJiraError("conflict", message, details);
+  throw new UnblockError("conflict", message, details);
 }
 
 export function validation(message: string, details?: unknown): never {
-  throw new NotJiraError("validation", message, details);
+  throw new UnblockError("validation", message, details);
 }
 
 export function invariant(message: string, details?: unknown): never {
-  throw new NotJiraError("invariant", message, details);
+  throw new UnblockError("invariant", message, details);
 }

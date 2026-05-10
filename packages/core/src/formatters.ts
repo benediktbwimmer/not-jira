@@ -10,7 +10,7 @@ export function formatTaskTable(tasks: TaskView[]): string {
     task.descendantsCount > 0 ? `${task.subtreeProgress}%` : "",
     task.rollupStatus === "blocked-by-children" ? `${task.unfinishedDescendantsCount} child blockers` : "",
     task.parentTaskId ?? "",
-    task.assignedTrack?.actor ?? "",
+    task.assignedTrack ? formatActorRef(task.assignedTrack) : "",
     `${"  ".repeat(task.hierarchyDepth)}${task.title}`
   ]);
   return table(["ID", "Status", "Priority", "Depth", "Unblocks", "Progress", "Rollup", "Parent", "Actor", "Title"], rows);
@@ -20,7 +20,7 @@ export function formatTaskMarkdown(tasks: TaskView[]): string {
   const lines = ["| ID | Status | Priority | Depth | Unblocks | Progress | Rollup | Parent | Actor | Title |", "| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |"];
   for (const task of tasks) {
     const rollup = task.rollupStatus === "blocked-by-children" ? `${task.unfinishedDescendantsCount} child blockers` : "";
-    lines.push(`| ${task.id} | ${task.computedStatus} | ${priorityLabel(task.priority)} | ${task.dependencyDepth} | ${task.transitiveDependentsCount} | ${task.descendantsCount > 0 ? `${task.subtreeProgress}%` : ""} | ${rollup} | ${task.parentTaskId ?? ""} | ${task.assignedTrack?.actor ?? ""} | ${task.title.replace(/\|/g, "\\|")} |`);
+    lines.push(`| ${task.id} | ${task.computedStatus} | ${priorityLabel(task.priority)} | ${task.dependencyDepth} | ${task.transitiveDependentsCount} | ${task.descendantsCount > 0 ? `${task.subtreeProgress}%` : ""} | ${rollup} | ${task.parentTaskId ?? ""} | ${task.assignedTrack ? formatActorRef(task.assignedTrack) : ""} | ${task.title.replace(/\|/g, "\\|")} |`);
   }
   return lines.join("\n");
 }
@@ -39,7 +39,7 @@ export function formatExplain(explanation: DependencyExplanation): string {
     `Subtree: ${task.subtreeProgress}% (${task.finishedLeafDescendantsCount}/${task.leafDescendantsCount} leaf tasks finished)`,
     `Rollup: ${formatRollup(task)}`,
     `Source: ${task.sourceDoc ?? "none"}${task.sourceSection ? `#${task.sourceSection}` : ""}`,
-    `Assigned: ${task.assignedTrack?.actor ?? "none"}`,
+    `Assigned: ${task.assignedTrack ? formatActorRef(task.assignedTrack) : "none"}`,
     "",
     "Blocked by:"
   ];
@@ -65,12 +65,17 @@ export function formatExplain(explanation: DependencyExplanation): string {
 }
 
 export function formatActivity(activity: Activity[]): string {
-  return table(["Created", "Type", "Subject", "Message"], activity.map((item) => [
+  return table(["Created", "Actor", "Type", "Subject", "Message"], activity.map((item) => [
     item.createdAt,
+    formatActorRef(item),
     item.type,
     `${item.subjectType}:${item.subjectId ?? ""}`,
     item.message
   ]));
+}
+
+function formatActorRef(identity: { machine: string; actor: string }): string {
+  return `${identity.machine}:${identity.actor}`;
 }
 
 function table(headers: string[], rows: string[][]): string {

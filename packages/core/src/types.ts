@@ -18,11 +18,23 @@ export type Priority = z.infer<typeof prioritySchema>;
 
 export type ComputedStatus = "ready" | "blocked" | "started" | "finished" | "archived";
 export type RollupStatus = "leaf" | "complete" | "blocked-by-children";
-export type SubjectType = "task" | "tag" | "track" | "import" | "export" | "system";
+export type SubjectType = "project" | "task" | "tag" | "track" | "import" | "export" | "system";
 export type OutputFormat = "table" | "json" | "markdown";
 export type TaskSort = "dependency" | "priority" | "depth" | "created" | "updated" | "id" | "title";
 
+export const DEFAULT_PROJECT_ID = "DEFAULT";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
 export interface Task {
+  projectId: string;
   id: string;
   parentTaskId: string | null;
   title: string;
@@ -45,12 +57,14 @@ export interface Task {
 }
 
 export interface Dependency {
+  projectId: string;
   taskId: string;
   dependsOnTaskId: string;
   createdAt: string;
 }
 
 export interface Tag {
+  projectId: string;
   id: string;
   name: string;
   color: string | null;
@@ -62,13 +76,16 @@ export interface Tag {
 }
 
 export interface TaskTag {
+  projectId: string;
   taskId: string;
   tagId: string;
   createdAt: string;
 }
 
 export interface Track {
+  projectId: string;
   id: string;
+  machine: string;
   actor: string;
   name: string | null;
   createdAt: string;
@@ -77,6 +94,7 @@ export interface Track {
 }
 
 export interface TrackAssignment {
+  projectId: string;
   trackId: string;
   taskId: string;
   position: string;
@@ -84,13 +102,15 @@ export interface TrackAssignment {
 }
 
 export interface Activity {
+  projectId: string | null;
   id: string;
   type: string;
   subjectType: SubjectType;
   subjectId: string | null;
   message: string;
   data: Record<string, unknown>;
-  actor: string | null;
+  machine: string;
+  actor: string;
   createdAt: string;
 }
 
@@ -102,6 +122,7 @@ export interface Migration {
 
 export interface AssignedTrackView {
   trackId: string;
+  machine: string;
   actor: string;
   name: string | null;
   position: string;
@@ -215,6 +236,12 @@ export interface AddTaskInput {
   completionBar?: string | null;
 }
 
+export interface AddProjectInput {
+  id: string;
+  name?: string;
+  description?: string | null;
+}
+
 export interface EditTaskInput {
   parentTaskId?: string | null;
   title?: string;
@@ -240,6 +267,7 @@ export interface AddTagInput {
 
 export interface AddTrackInput {
   id?: string;
+  machine?: string;
   actor: string;
   name?: string | null;
 }
@@ -364,14 +392,14 @@ export function priorityLabel(priority: Priority): string {
   }
 }
 
-export function defaultNotJiraDir(): string {
-  return join(homedir(), ".not-jira");
+export function defaultUnblockDir(): string {
+  return join(homedir(), ".unblock");
 }
 
-export function defaultNotJiraDbPath(): string {
-  return join(defaultNotJiraDir(), "not-jira.sqlite");
+export function defaultUnblockDbPath(): string {
+  return join(defaultUnblockDir(), "unblock.sqlite");
 }
 
-export function defaultNotJiraConfigPath(): string {
-  return join(defaultNotJiraDir(), "config.json");
+export function defaultUnblockConfigPath(): string {
+  return join(defaultUnblockDir(), "config.json");
 }

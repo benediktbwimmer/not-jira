@@ -1,10 +1,10 @@
 {
-  "name": "not-jira-workspace",
+  "name": "unblock-workspace",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "not-jira": "packages/cli/dist/index.js"
+    "unblock": "packages/cli/dist/index.js"
   },
   "workspaces": [
     "packages/*"
@@ -13,9 +13,9 @@
     "build": "npm run build --workspaces",
     "check": "npm run check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "dev:web": "npm run dev -w @not-jira/web",
-    "dev:server": "npm run dev -w @not-jira/server",
-    "not-jira": "npm run dev -w @not-jira/cli --"
+    "dev:web": "npm run dev -w @unblock/web",
+    "dev:server": "npm run dev -w @unblock/server",
+    "unblock": "npm run dev -w @unblock/cli --"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

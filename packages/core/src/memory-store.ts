@@ -3,14 +3,17 @@ import type {
   AppStore,
   DependencyRepository,
   MigrationRepository,
+  ProjectRepository,
   RepositorySet,
   TagRepository,
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Migration, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Dependency, Migration, Project, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
+import { DEFAULT_PROJECT_ID, nowIso } from "./types.js";
 
 interface MemoryState {
+  projects: Map<string, Project>;
   tasks: Map<string, Task>;
   dependencies: Map<string, Dependency>;
   tags: Map<string, Tag>;
@@ -24,6 +27,7 @@ interface MemoryState {
 export class MemoryStore implements AppStore {
   private readonly state: MemoryState;
   readonly tasks: TaskRepository;
+  readonly projects: ProjectRepository;
   readonly dependencies: DependencyRepository;
   readonly tags: TagRepository;
   readonly tracks: TrackRepository;
@@ -36,20 +40,35 @@ export class MemoryStore implements AppStore {
     tags: Tag[];
     taskTags: TaskTag[];
     tracks: Track[];
+    projects: Project[];
     assignments: TrackAssignment[];
     activity: Activity[];
     migrations: Migration[];
   }>) {
+    const projects = new Map((seed?.projects ?? []).map((project) => [project.id, project]));
+    if (!projects.has(DEFAULT_PROJECT_ID)) {
+      const now = nowIso();
+      projects.set(DEFAULT_PROJECT_ID, {
+        id: DEFAULT_PROJECT_ID,
+        name: "Default",
+        description: "Migrated default project",
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null
+      });
+    }
     this.state = {
-      tasks: new Map((seed?.tasks ?? []).map((task) => [task.id, task])),
-      dependencies: new Map((seed?.dependencies ?? []).map((dependency) => [dependencyKey(dependency.taskId, dependency.dependsOnTaskId), dependency])),
-      tags: new Map((seed?.tags ?? []).map((tag) => [tag.id, tag])),
-      taskTags: new Map((seed?.taskTags ?? []).map((taskTag) => [taskTagKey(taskTag.taskId, taskTag.tagId), taskTag])),
-      tracks: new Map((seed?.tracks ?? []).map((track) => [track.id, track])),
-      assignments: new Map((seed?.assignments ?? []).map((assignment) => [assignmentKey(assignment.trackId, assignment.taskId), assignment])),
+      projects,
+      tasks: new Map((seed?.tasks ?? []).map((task) => [taskKey(task.projectId, task.id), task])),
+      dependencies: new Map((seed?.dependencies ?? []).map((dependency) => [dependencyKey(dependency.projectId, dependency.taskId, dependency.dependsOnTaskId), dependency])),
+      tags: new Map((seed?.tags ?? []).map((tag) => [scopedKey(tag.projectId, tag.id), tag])),
+      taskTags: new Map((seed?.taskTags ?? []).map((taskTag) => [taskTagKey(taskTag.projectId, taskTag.taskId, taskTag.tagId), taskTag])),
+      tracks: new Map((seed?.tracks ?? []).map((track) => [scopedKey(track.projectId, track.id), track])),
+      assignments: new Map((seed?.assignments ?? []).map((assignment) => [assignmentKey(assignment.projectId, assignment.trackId, assignment.taskId), assignment])),
       activity: [...(seed?.activity ?? [])],
       migrations: new Map((seed?.migrations ?? []).map((migration) => [migration.id, migration]))
     };
+    this.projects = new MemoryProjectRepository(this.state);
     this.tasks = new MemoryTaskRepository(this.state);
     this.dependencies = new MemoryDependencyRepository(this.state);
     this.tags = new MemoryTagRepository(this.state);
@@ -73,40 +92,61 @@ export function createMemoryStore(seed?: ConstructorParameters<typeof MemoryStor
   return new MemoryStore(seed);
 }
 
+class MemoryProjectRepository implements ProjectRepository {
+  constructor(private readonly state: MemoryState) {}
+
+  async list(): Promise<Project[]> {
+    return [...this.state.projects.values()].map(cloneProject).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  async get(id: string): Promise<Project | null> {
+    const project = this.state.projects.get(id);
+    return project ? cloneProject(project) : null;
+  }
+
+  async create(project: Project): Promise<void> {
+    this.state.projects.set(project.id, cloneProject(project));
+  }
+
+  async update(project: Project): Promise<void> {
+    this.state.projects.set(project.id, cloneProject(project));
+  }
+}
+
 class MemoryTaskRepository implements TaskRepository {
   constructor(private readonly state: MemoryState) {}
 
-  async list(): Promise<Task[]> {
-    return [...this.state.tasks.values()].map(cloneTask).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  async list(projectId?: string): Promise<Task[]> {
+    return [...this.state.tasks.values()].filter((task) => !projectId || task.projectId === projectId).map(cloneTask).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
-  async get(id: string): Promise<Task | null> {
-    const task = this.state.tasks.get(id);
+  async get(projectId: string, id: string): Promise<Task | null> {
+    const task = this.state.tasks.get(taskKey(projectId, id));
     return task ? cloneTask(task) : null;
   }
 
   async create(task: Task): Promise<void> {
-    this.state.tasks.set(task.id, cloneTask(task));
+    this.state.tasks.set(taskKey(task.projectId, task.id), cloneTask(task));
   }
 
   async update(task: Task): Promise<void> {
-    this.state.tasks.set(task.id, cloneTask(task));
+    this.state.tasks.set(taskKey(task.projectId, task.id), cloneTask(task));
   }
 
-  async delete(id: string): Promise<void> {
-    this.state.tasks.delete(id);
+  async delete(projectId: string, id: string): Promise<void> {
+    this.state.tasks.delete(taskKey(projectId, id));
     for (const key of [...this.state.dependencies.keys()]) {
-      if (key.startsWith(`${id}\u0000`)) {
+      if (key.startsWith(`${projectId}\u0000${id}\u0000`)) {
         this.state.dependencies.delete(key);
       }
     }
     for (const key of [...this.state.taskTags.keys()]) {
-      if (key.startsWith(`${id}\u0000`)) {
+      if (key.startsWith(`${projectId}\u0000${id}\u0000`)) {
         this.state.taskTags.delete(key);
       }
     }
     for (const [key, assignment] of this.state.assignments) {
-      if (assignment.taskId === id) {
+      if (assignment.projectId === projectId && assignment.taskId === id) {
         this.state.assignments.delete(key);
       }
     }
@@ -116,29 +156,29 @@ class MemoryTaskRepository implements TaskRepository {
 class MemoryDependencyRepository implements DependencyRepository {
   constructor(private readonly state: MemoryState) {}
 
-  async list(): Promise<Dependency[]> {
-    return [...this.state.dependencies.values()].map(cloneDependency);
+  async list(projectId?: string): Promise<Dependency[]> {
+    return [...this.state.dependencies.values()].filter((dependency) => !projectId || dependency.projectId === projectId).map(cloneDependency);
   }
 
-  async listForTask(taskId: string): Promise<Dependency[]> {
-    return [...this.state.dependencies.values()].filter((dependency) => dependency.taskId === taskId).map(cloneDependency);
+  async listForTask(projectId: string, taskId: string): Promise<Dependency[]> {
+    return [...this.state.dependencies.values()].filter((dependency) => dependency.projectId === projectId && dependency.taskId === taskId).map(cloneDependency);
   }
 
-  async listDependents(dependsOnTaskId: string): Promise<Dependency[]> {
-    return [...this.state.dependencies.values()].filter((dependency) => dependency.dependsOnTaskId === dependsOnTaskId).map(cloneDependency);
+  async listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]> {
+    return [...this.state.dependencies.values()].filter((dependency) => dependency.projectId === projectId && dependency.dependsOnTaskId === dependsOnTaskId).map(cloneDependency);
   }
 
   async add(dependency: Dependency): Promise<void> {
-    this.state.dependencies.set(dependencyKey(dependency.taskId, dependency.dependsOnTaskId), cloneDependency(dependency));
+    this.state.dependencies.set(dependencyKey(dependency.projectId, dependency.taskId, dependency.dependsOnTaskId), cloneDependency(dependency));
   }
 
-  async remove(taskId: string, dependsOnTaskId: string): Promise<void> {
-    this.state.dependencies.delete(dependencyKey(taskId, dependsOnTaskId));
+  async remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void> {
+    this.state.dependencies.delete(dependencyKey(projectId, taskId, dependsOnTaskId));
   }
 
-  async replaceForTask(taskId: string, dependencies: Dependency[]): Promise<void> {
+  async replaceForTask(projectId: string, taskId: string, dependencies: Dependency[]): Promise<void> {
     for (const key of [...this.state.dependencies.keys()]) {
-      if (key.startsWith(`${taskId}\u0000`)) {
+      if (key.startsWith(`${projectId}\u0000${taskId}\u0000`)) {
         this.state.dependencies.delete(key);
       }
     }
@@ -151,88 +191,92 @@ class MemoryDependencyRepository implements DependencyRepository {
 class MemoryTagRepository implements TagRepository {
   constructor(private readonly state: MemoryState) {}
 
-  async list(): Promise<Tag[]> {
-    return [...this.state.tags.values()].map(cloneTag).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+  async list(projectId?: string): Promise<Tag[]> {
+    return [...this.state.tags.values()].filter((tag) => !projectId || tag.projectId === projectId).map(cloneTag).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   }
 
-  async get(id: string): Promise<Tag | null> {
-    const tag = this.state.tags.get(id);
+  async get(projectId: string, id: string): Promise<Tag | null> {
+    const tag = this.state.tags.get(scopedKey(projectId, id));
     return tag ? cloneTag(tag) : null;
   }
 
-  async findByName(name: string): Promise<Tag | null> {
-    const tag = [...this.state.tags.values()].find((item) => item.name === name);
+  async findByName(projectId: string, name: string): Promise<Tag | null> {
+    const tag = [...this.state.tags.values()].find((item) => item.projectId === projectId && item.name === name);
     return tag ? cloneTag(tag) : null;
   }
 
   async create(tag: Tag): Promise<void> {
-    this.state.tags.set(tag.id, cloneTag(tag));
+    this.state.tags.set(scopedKey(tag.projectId, tag.id), cloneTag(tag));
   }
 
   async update(tag: Tag): Promise<void> {
-    this.state.tags.set(tag.id, cloneTag(tag));
+    this.state.tags.set(scopedKey(tag.projectId, tag.id), cloneTag(tag));
   }
 
-  async listTaskTags(): Promise<TaskTag[]> {
-    return [...this.state.taskTags.values()].map(cloneTaskTag);
+  async listTaskTags(projectId?: string): Promise<TaskTag[]> {
+    return [...this.state.taskTags.values()].filter((taskTag) => !projectId || taskTag.projectId === projectId).map(cloneTaskTag);
   }
 
   async addTaskTag(taskTag: TaskTag): Promise<void> {
-    this.state.taskTags.set(taskTagKey(taskTag.taskId, taskTag.tagId), cloneTaskTag(taskTag));
+    this.state.taskTags.set(taskTagKey(taskTag.projectId, taskTag.taskId, taskTag.tagId), cloneTaskTag(taskTag));
   }
 
-  async removeTaskTag(taskId: string, tagId: string): Promise<void> {
-    this.state.taskTags.delete(taskTagKey(taskId, tagId));
+  async removeTaskTag(projectId: string, taskId: string, tagId: string): Promise<void> {
+    this.state.taskTags.delete(taskTagKey(projectId, taskId, tagId));
   }
 }
 
 class MemoryTrackRepository implements TrackRepository {
   constructor(private readonly state: MemoryState) {}
 
-  async list(): Promise<Track[]> {
-    return [...this.state.tracks.values()].map(cloneTrack).sort((a, b) => a.actor.localeCompare(b.actor));
+  async list(projectId?: string): Promise<Track[]> {
+    return [...this.state.tracks.values()].filter((track) => !projectId || track.projectId === projectId).map(cloneTrack).sort((a, b) => a.machine.localeCompare(b.machine) || a.actor.localeCompare(b.actor));
   }
 
-  async get(id: string): Promise<Track | null> {
-    const track = this.state.tracks.get(id);
+  async get(projectId: string, id: string): Promise<Track | null> {
+    const track = this.state.tracks.get(scopedKey(projectId, id));
     return track ? cloneTrack(track) : null;
   }
 
-  async findByActor(actor: string): Promise<Track | null> {
-    const track = [...this.state.tracks.values()].find((item) => item.actor === actor);
+  async findByActor(projectId: string, machine: string, actor: string): Promise<Track | null> {
+    const track = [...this.state.tracks.values()].find((item) => item.projectId === projectId && item.machine === machine && item.actor === actor);
     return track ? cloneTrack(track) : null;
   }
 
   async create(track: Track): Promise<void> {
-    this.state.tracks.set(track.id, cloneTrack(track));
+    this.state.tracks.set(scopedKey(track.projectId, track.id), cloneTrack(track));
   }
 
   async update(track: Track): Promise<void> {
-    this.state.tracks.set(track.id, cloneTrack(track));
+    this.state.tracks.set(scopedKey(track.projectId, track.id), cloneTrack(track));
   }
 
-  async listAssignments(): Promise<TrackAssignment[]> {
-    return [...this.state.assignments.values()].map(cloneAssignment).sort((a, b) => a.trackId.localeCompare(b.trackId) || a.position.localeCompare(b.position));
+  async listAssignments(projectId?: string): Promise<TrackAssignment[]> {
+    return [...this.state.assignments.values()].filter((assignment) => !projectId || assignment.projectId === projectId).map(cloneAssignment).sort((a, b) => a.trackId.localeCompare(b.trackId) || a.position.localeCompare(b.position));
   }
 
   async assign(assignment: TrackAssignment): Promise<void> {
-    this.state.assignments.set(assignmentKey(assignment.trackId, assignment.taskId), cloneAssignment(assignment));
+    this.state.assignments.set(assignmentKey(assignment.projectId, assignment.trackId, assignment.taskId), cloneAssignment(assignment));
   }
 
-  async unassign(trackId: string, taskId: string): Promise<void> {
-    this.state.assignments.delete(assignmentKey(trackId, taskId));
+  async unassign(projectId: string, trackId: string, taskId: string): Promise<void> {
+    this.state.assignments.delete(assignmentKey(projectId, trackId, taskId));
   }
 
   async updateAssignment(assignment: TrackAssignment): Promise<void> {
-    this.state.assignments.set(assignmentKey(assignment.trackId, assignment.taskId), cloneAssignment(assignment));
+    this.state.assignments.set(assignmentKey(assignment.projectId, assignment.trackId, assignment.taskId), cloneAssignment(assignment));
   }
 }
 
 class MemoryActivityRepository implements ActivityRepository {
   constructor(private readonly state: MemoryState) {}
 
-  async list(limit = 100): Promise<Activity[]> {
-    return [...this.state.activity].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit).map(cloneActivity);
+  async list(projectId: string | null = null, limit = 100): Promise<Activity[]> {
+    return [...this.state.activity]
+      .filter((activity) => projectId === null || activity.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit)
+      .map(cloneActivity);
   }
 
   async append(activity: Activity): Promise<void> {
@@ -252,16 +296,28 @@ class MemoryMigrationRepository implements MigrationRepository {
   }
 }
 
-function dependencyKey(taskId: string, dependsOnTaskId: string): string {
-  return `${taskId}\u0000${dependsOnTaskId}`;
+function scopedKey(projectId: string, id: string): string {
+  return `${projectId}\u0000${id}`;
 }
 
-function taskTagKey(taskId: string, tagId: string): string {
-  return `${taskId}\u0000${tagId}`;
+function taskKey(projectId: string, taskId: string): string {
+  return scopedKey(projectId, taskId);
 }
 
-function assignmentKey(trackId: string, taskId: string): string {
-  return `${trackId}\u0000${taskId}`;
+function dependencyKey(projectId: string, taskId: string, dependsOnTaskId: string): string {
+  return `${projectId}\u0000${taskId}\u0000${dependsOnTaskId}`;
+}
+
+function taskTagKey(projectId: string, taskId: string, tagId: string): string {
+  return `${projectId}\u0000${taskId}\u0000${tagId}`;
+}
+
+function assignmentKey(projectId: string, trackId: string, taskId: string): string {
+  return `${projectId}\u0000${trackId}\u0000${taskId}`;
+}
+
+function cloneProject(project: Project): Project {
+  return { ...project };
 }
 
 function cloneTask(task: Task): Task {
@@ -299,6 +355,7 @@ function cloneMigration(migration: Migration): Migration {
 function cloneState(state: MemoryState): MemoryState {
   return {
     tasks: new Map([...state.tasks].map(([key, value]) => [key, cloneTask(value)])),
+    projects: new Map([...state.projects].map(([key, value]) => [key, cloneProject(value)])),
     dependencies: new Map([...state.dependencies].map(([key, value]) => [key, cloneDependency(value)])),
     tags: new Map([...state.tags].map(([key, value]) => [key, cloneTag(value)])),
     taskTags: new Map([...state.taskTags].map(([key, value]) => [key, cloneTaskTag(value)])),
@@ -311,6 +368,7 @@ function cloneState(state: MemoryState): MemoryState {
 
 function restoreState(target: MemoryState, source: MemoryState): void {
   target.tasks = source.tasks;
+  target.projects = source.projects;
   target.dependencies = source.dependencies;
   target.tags = source.tags;
   target.taskTags = source.taskTags;
