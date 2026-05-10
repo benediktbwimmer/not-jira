@@ -415,6 +415,11 @@ h3 {
   padding: 2px 5px;
 }
 
+.task-meta .rollup-chip {
+  color: #8f241f;
+  background: #fde9e7;
+}
+
 .row-actions {
   display: flex;
   gap: 4px;
@@ -527,6 +532,26 @@ h3 {
 
 .blocked-line {
   color: #9e3528 !important;
+}
+
+.rollup-warning {
+  color: #9e3528 !important;
+  font-weight: 650;
+}
+
+.critical-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.critical-path span {
+  border: 1px solid #f0c8c3;
+  background: #fff5f3;
+  color: #7b2b23;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
 }
 
 .assignable.yes {
@@ -666,6 +691,7 @@ h3 {
 }
 
 .error,
+.warning,
 .loading {
   margin: 14px;
   border-radius: 6px;
@@ -682,6 +708,12 @@ h3 {
   color: #3f536f;
   background: #eaf0fa;
   border: 1px solid #c9d8ef;
+}
+
+.warning {
+  color: #7a4d00;
+  background: #fff7dd;
+  border: 1px solid #f0d58a;
 }
 
 @media (max-width: 980px) {
@@ -862,8 +894,16 @@ h3 {
   }
 
   .blocked-line,
-  .assignable.no {
+  .assignable.no,
+  .rollup-warning {
     color: #ffb2a8 !important;
+  }
+
+  .task-meta .rollup-chip,
+  .critical-path span {
+    color: #ffc5bd;
+    background: #3a1b1b;
+    border-color: #7e332b;
   }
 
   .assignable.yes,
@@ -882,5 +922,11 @@ h3 {
     color: #c4d6f5;
     background: #17253b;
     border-color: #29466d;
+  }
+
+  .warning {
+    color: #ffe0a3;
+    background: #322612;
+    border-color: #72551f;
   }
 }

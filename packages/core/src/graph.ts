@@ -83,21 +83,24 @@ export function assertNoParentCycle(taskId: string, parentTaskId: string | null,
 }
 
 export function isDescendant(taskId: string, possibleDescendantId: string, tasks: Task[]): boolean {
+  return listDescendantIds(taskId, tasks).includes(possibleDescendantId);
+}
+
+export function listDescendantIds(taskId: string, tasks: Task[]): string[] {
   const hierarchy = buildHierarchyIndexes(tasks);
   const stack = [...(hierarchy.childrenByParent.get(taskId) ?? [])];
   const visited = new Set<string>();
+  const result: string[] = [];
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current || visited.has(current)) {
       continue;
     }
-    if (current === possibleDescendantId) {
-      return true;
-    }
     visited.add(current);
+    result.push(current);
     stack.push(...(hierarchy.childrenByParent.get(current) ?? []));
   }
-  return false;
+  return result;
 }
 
 export function assertNoCycle(taskId: string, dependsOnTaskId: string, dependencies: Dependency[]): void {

@@ -1,5 +1,5 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import {
   Activity,
   Archive,
@@ -21,6 +21,7 @@ import "./styles.css";
 
 type Lifecycle = "open" | "started" | "finished";
 type ComputedStatus = "ready" | "blocked" | "started" | "finished" | "archived";
+type RollupStatus = "leaf" | "complete" | "blocked-by-children";
 type Size = "XS" | "S" | "M" | "L" | "XL";
 type Priority = 0 | 1 | 2 | 3 | 4;
 
@@ -72,6 +73,15 @@ interface TaskView {
   subtreeStartedCount: number;
   subtreeFinishedCount: number;
   hierarchyDepth: number;
+  rollupStatus?: RollupStatus;
+  unfinishedDescendantsCount?: number;
+  criticalChildPath?: Array<{
+    id: string;
+    title: string;
+    lifecycle: Lifecycle;
+    computedStatus: ComputedStatus;
+    unfinishedDependenciesCount: number;
+  }>;
   assignedTrack: { trackId: string; actor: string; name: string | null; position: string } | null;
   tags: TagRecord[];
 }
@@ -109,6 +119,60 @@ interface SourceCoverage {
 }
 
 type ViewMode = "tasks" | "queues" | "tags" | "coverage" | "activity";
+type StatusFilter = ComputedStatus | "all";
+
+interface AppConfig {
+  ui: {
+    refreshIntervalMs: number;
+    persistState: boolean;
+  };
+  issues?: string[];
+}
+
+interface UiState {
+  mode: ViewMode;
+  selectedId: string | null;
+  status: StatusFilter;
+  search: string;
+  includeFinished: boolean;
+  includeArchived: boolean;
+  collapsedTaskIds: string[];
+  scrollPositions: Record<string, number>;
+  newTaskDraft: {
+    id: string;
+    title: string;
+    parentTaskId: string;
+    priority: string;
+  };
+  newTrackDraft: string;
+  newTagDraft: string;
+}
+
+interface RefreshOptions {
+  silent?: boolean;
+}
+
+const UI_STATE_KEY = "not-jira.ui-state.v1";
+const DEFAULT_APP_CONFIG: AppConfig = {
+  ui: {
+    refreshIntervalMs: 5000,
+    persistState: true
+  },
+  issues: []
+};
+const DEFAULT_UI_STATE: UiState = {
+  mode: "tasks",
+  selectedId: null,
+  status: "all",
+  search: "",
+  includeFinished: false,
+  includeArchived: false,
+  collapsedTaskIds: [],
+  scrollPositions: {},
+  newTaskDraft: { id: "", title: "", parentTaskId: "", priority: "2" },
+  newTrackDraft: "",
+  newTagDraft: ""
+};
 
 function App() {
   const [tasks, setTasks] = useState<TaskView[]>([]);
@@ -116,25 +180,30 @@ function App() {
   const [tags, setTags] = useState<TagRecord[]>([]);
   const [activity, setActivity] = useState<ActivityRecord[]>([]);
   const [coverage, setCoverage] = useState<SourceCoverage[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [appConfig, setAppConfig] = useState<AppConfig>(DEFAULT_APP_CONFIG);
+  const [uiState, setUiState] = usePersistentUiState(appConfig.ui.persistState);
   const [explanation, setExplanation] = useState<Explanation | null>(null);
-  const [mode, setMode] = useState<ViewMode>("tasks");
-  const [status, setStatus] = useState<ComputedStatus | "all">("all");
-  const [search, setSearch] = useState("");
-  const [includeFinished, setIncludeFinished] = useState(false);
-  const [includeArchived, setIncludeArchived] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [newTask, setNewTask] = useState({ id: "", title: "", parentTaskId: "", priority: "2" });
-  const [newTrack, setNewTrack] = useState("");
-  const [newTag, setNewTag] = useState("");
+  const [dataVersion, setDataVersion] = useState(0);
+  const taskTreeRef = useRef<HTMLDivElement | null>(null);
+  const refreshRef = useRef<((options?: RefreshOptions) => Promise<void>) | null>(null);
+  const scrollPatchRef = useRef<Record<string, number>>({});
+  const scrollFrameRef = useRef<number | null>(null);
 
-  const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedId) ?? tasks[0] ?? null, [selectedId, tasks]);
+  const selectedTask = useMemo(() => tasks.find((task) => task.id === uiState.selectedId) ?? tasks[0] ?? null, [uiState.selectedId, tasks]);
   const roots = useMemo(() => buildTaskTree(tasks), [tasks]);
   const readyTasks = useMemo(() => tasks.filter((task) => task.ready), [tasks]);
+  const collapsedTaskIds = useMemo(() => new Set(uiState.collapsedTaskIds), [uiState.collapsedTaskIds]);
+
+  const updateUiState = useCallback((update: Partial<UiState> | ((current: UiState) => UiState)) => {
+    setUiState((current) => typeof update === "function" ? update(current) : { ...current, ...update });
+  }, [setUiState]);
 
   useEffect(() => {
-    void refresh();
+    fetchJson<AppConfig>("/api/config")
+      .then((config) => setAppConfig(normalizeAppConfig(config)))
+      .catch(() => setAppConfig(DEFAULT_APP_CONFIG));
   }, []);
 
   useEffect(() => {
@@ -143,24 +212,26 @@ function App() {
       return;
     }
     fetchJson<Explanation>(`/api/tasks/${selectedTask.id}/explain`).then(setExplanation).catch((reason) => setError(String(reason)));
-  }, [selectedTask?.id]);
+  }, [selectedTask?.id, dataVersion]);
 
-  async function refresh() {
-    setLoading(true);
+  const refresh = useCallback(async (options: RefreshOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const params = new URLSearchParams();
       params.set("sort", "dependency");
-      if (status !== "all") {
-        params.set("status", status);
+      if (uiState.status !== "all") {
+        params.set("status", uiState.status);
       }
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (uiState.search.trim()) {
+        params.set("search", uiState.search.trim());
       }
-      if (includeFinished) {
+      if (uiState.includeFinished) {
         params.set("includeFinished", "true");
       }
-      if (includeArchived) {
+      if (uiState.includeArchived) {
         params.set("includeArchived", "true");
       }
       const [taskData, trackData, tagData, activityData, coverageData] = await Promise.all([
@@ -175,31 +246,107 @@ function App() {
       setTags(tagData);
       setActivity(activityData);
       setCoverage(coverageData);
-      if (!selectedId && taskData.length > 0) {
-        setSelectedId(taskData[0]?.id ?? null);
-      }
+      updateUiState((current) => ({
+        ...current,
+        selectedId: current.selectedId && taskData.some((task) => task.id === current.selectedId)
+          ? current.selectedId
+          : taskData[0]?.id ?? null
+      }));
+      setDataVersion((version) => version + 1);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
+  }, [uiState.status, uiState.search, uiState.includeFinished, uiState.includeArchived, updateUiState]);
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    void refresh({ silent: false });
+  }, []);
+
+  useEffect(() => {
+    const intervalMs = appConfig.ui.refreshIntervalMs;
+    if (intervalMs <= 0) {
+      return undefined;
+    }
+    const interval = window.setInterval(() => {
+      void refreshRef.current?.({ silent: true });
+    }, intervalMs);
+    return () => window.clearInterval(interval);
+  }, [appConfig.ui.refreshIntervalMs]);
+
+  useEffect(() => {
+    if (loading) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const taskTreeScroll = uiState.scrollPositions["tasks.tree"];
+      if (taskTreeRef.current && taskTreeScroll !== undefined) {
+        taskTreeRef.current.scrollTop = taskTreeScroll;
+      }
+      const windowScroll = uiState.scrollPositions[`window.${uiState.mode}`];
+      if (windowScroll !== undefined) {
+        window.scrollTo({ top: windowScroll });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, uiState.mode]);
+
+  useEffect(() => {
+    const onScroll = () => recordScrollPosition(`window.${uiState.mode}`, window.scrollY);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [uiState.mode]);
+
+  function recordScrollPosition(key: string, value: number) {
+    scrollPatchRef.current[key] = value;
+    if (scrollFrameRef.current !== null) {
+      return;
+    }
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      const patch = scrollPatchRef.current;
+      scrollPatchRef.current = {};
+      scrollFrameRef.current = null;
+      updateUiState((current) => ({
+        ...current,
+        scrollPositions: { ...current.scrollPositions, ...patch }
+      }));
+    });
+  }
+
+  function toggleTaskExpanded(taskId: string) {
+    updateUiState((current) => {
+      const collapsed = new Set(current.collapsedTaskIds);
+      if (collapsed.has(taskId)) {
+        collapsed.delete(taskId);
+      } else {
+        collapsed.add(taskId);
+      }
+      return { ...current, collapsedTaskIds: [...collapsed].sort() };
+    });
   }
 
   async function createTask() {
-    if (!newTask.id.trim() || !newTask.title.trim()) {
+    if (!uiState.newTaskDraft.id.trim() || !uiState.newTaskDraft.title.trim()) {
       return;
     }
     await runMutation(async () => {
       await mutate("/api/tasks", {
         method: "POST",
         body: {
-          id: newTask.id,
-          title: newTask.title,
-          parentTaskId: newTask.parentTaskId.trim() || null,
-          priority: Number(newTask.priority)
+          id: uiState.newTaskDraft.id,
+          title: uiState.newTaskDraft.title,
+          parentTaskId: uiState.newTaskDraft.parentTaskId.trim() || null,
+          priority: Number(uiState.newTaskDraft.priority)
         }
       });
-      setNewTask({ id: "", title: "", parentTaskId: "", priority: "2" });
+      updateUiState({ newTaskDraft: DEFAULT_UI_STATE.newTaskDraft });
       await refresh();
     });
   }
@@ -225,23 +372,23 @@ function App() {
   }
 
   async function createTrack() {
-    if (!newTrack.trim()) {
+    if (!uiState.newTrackDraft.trim()) {
       return;
     }
     await runMutation(async () => {
-      await mutate("/api/tracks", { method: "POST", body: { actor: newTrack.trim() } });
-      setNewTrack("");
+      await mutate("/api/tracks", { method: "POST", body: { actor: uiState.newTrackDraft.trim() } });
+      updateUiState({ newTrackDraft: "" });
       await refresh();
     });
   }
 
   async function createTag() {
-    if (!newTag.trim()) {
+    if (!uiState.newTagDraft.trim()) {
       return;
     }
     await runMutation(async () => {
-      await mutate("/api/tags", { method: "POST", body: { name: newTag.trim() } });
-      setNewTag("");
+      await mutate("/api/tags", { method: "POST", body: { name: uiState.newTagDraft.trim() } });
+      updateUiState({ newTagDraft: "" });
       await refresh();
     });
   }
@@ -297,11 +444,11 @@ function App() {
           <span>not-jira</span>
         </div>
         <nav className="nav">
-          <NavButton active={mode === "tasks"} icon={<ListTree size={17} />} label="Tasks" onClick={() => setMode("tasks")} />
-          <NavButton active={mode === "queues"} icon={<UserRound size={17} />} label="Queues" onClick={() => setMode("queues")} />
-          <NavButton active={mode === "tags"} icon={<Tags size={17} />} label="Tags" onClick={() => setMode("tags")} />
-          <NavButton active={mode === "coverage"} icon={<Blocks size={17} />} label="Coverage" onClick={() => setMode("coverage")} />
-          <NavButton active={mode === "activity"} icon={<Activity size={17} />} label="Activity" onClick={() => setMode("activity")} />
+          <NavButton active={uiState.mode === "tasks"} icon={<ListTree size={17} />} label="Tasks" onClick={() => updateUiState({ mode: "tasks" })} />
+          <NavButton active={uiState.mode === "queues"} icon={<UserRound size={17} />} label="Queues" onClick={() => updateUiState({ mode: "queues" })} />
+          <NavButton active={uiState.mode === "tags"} icon={<Tags size={17} />} label="Tags" onClick={() => updateUiState({ mode: "tags" })} />
+          <NavButton active={uiState.mode === "coverage"} icon={<Blocks size={17} />} label="Coverage" onClick={() => updateUiState({ mode: "coverage" })} />
+          <NavButton active={uiState.mode === "activity"} icon={<Activity size={17} />} label="Activity" onClick={() => updateUiState({ mode: "activity" })} />
         </nav>
         <div className="ready-summary">
           <div>
@@ -319,9 +466,9 @@ function App() {
         <header className="toolbar">
           <div className="search-wrap">
             <Search size={17} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void refresh()} placeholder="Search tasks, source text, docs" />
+            <input value={uiState.search} onChange={(event) => updateUiState({ search: event.target.value })} onKeyDown={(event) => event.key === "Enter" && void refresh()} placeholder="Search tasks, source text, docs" />
           </div>
-          <select value={status} onChange={(event) => setStatus(event.target.value as ComputedStatus | "all")}>
+          <select value={uiState.status} onChange={(event) => updateUiState({ status: event.target.value as StatusFilter })}>
             <option value="all">All active</option>
             <option value="ready">Ready</option>
             <option value="blocked">Blocked</option>
@@ -329,15 +476,17 @@ function App() {
             <option value="finished">Finished</option>
             <option value="archived">Archived</option>
           </select>
-          <label className="toggle"><input type="checkbox" checked={includeFinished} onChange={(event) => setIncludeFinished(event.target.checked)} /> Finished</label>
-          <label className="toggle"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} /> Archived</label>
+          <label className="toggle"><input type="checkbox" checked={uiState.includeFinished} onChange={(event) => updateUiState({ includeFinished: event.target.checked })} /> Finished</label>
+          <label className="toggle"><input type="checkbox" checked={uiState.includeArchived} onChange={(event) => updateUiState({ includeArchived: event.target.checked })} /> Archived</label>
           <button className="icon-button" onClick={() => void refresh()} title="Refresh"><RefreshCw size={17} /></button>
         </header>
 
         {error ? <div className="error">{error}</div> : null}
         {loading ? <div className="loading">Loading dependency graph...</div> : null}
 
-        {mode === "tasks" ? (
+        {appConfig.issues?.length ? <div className="warning">Config warning: {appConfig.issues.join("; ")}</div> : null}
+
+        {uiState.mode === "tasks" ? (
           <section className="task-layout">
             <div className="task-list-panel">
               <div className="panel-heading">
@@ -347,7 +496,7 @@ function App() {
                 </div>
                 <Filter size={18} />
               </div>
-              <QuickCreateTask value={newTask} tasks={tasks} onChange={setNewTask} onSubmit={() => void createTask()} />
+              <QuickCreateTask value={uiState.newTaskDraft} tasks={tasks} onChange={(newTaskDraft) => updateUiState({ newTaskDraft })} onSubmit={() => void createTask()} />
               <div className="task-list-header">
                 <span />
                 <span />
@@ -357,13 +506,15 @@ function App() {
                 <span>Progress</span>
                 <span>Actions</span>
               </div>
-              <div className="task-tree">
+              <div className="task-tree" ref={taskTreeRef} onScroll={(event) => recordScrollPosition("tasks.tree", event.currentTarget.scrollTop)}>
                 {roots.map((node) => (
                   <TaskNode
                     key={node.task.id}
                     node={node}
                     selectedId={selectedTask?.id ?? null}
-                    onSelect={setSelectedId}
+                    collapsedTaskIds={collapsedTaskIds}
+                    onSelect={(selectedId) => updateUiState({ selectedId })}
+                    onToggleExpanded={toggleTaskExpanded}
                     onTransition={transitionTask}
                   />
                 ))}
@@ -384,16 +535,16 @@ function App() {
           </section>
         ) : null}
 
-        {mode === "queues" ? (
-          <QueuesView tracks={tracks} tasks={tasks} newTrack={newTrack} setNewTrack={setNewTrack} createTrack={() => void createTrack()} onAssign={(track, task) => void assignTask(track, task)} />
+        {uiState.mode === "queues" ? (
+          <QueuesView tracks={tracks} tasks={tasks} newTrack={uiState.newTrackDraft} setNewTrack={(newTrackDraft) => updateUiState({ newTrackDraft })} createTrack={() => void createTrack()} onAssign={(track, task) => void assignTask(track, task)} />
         ) : null}
 
-        {mode === "tags" ? (
-          <TagsView tags={tags} tasks={tasks} newTag={newTag} setNewTag={setNewTag} createTag={() => void createTag()} />
+        {uiState.mode === "tags" ? (
+          <TagsView tags={tags} tasks={tasks} newTag={uiState.newTagDraft} setNewTag={(newTagDraft) => updateUiState({ newTagDraft })} createTag={() => void createTag()} />
         ) : null}
 
-        {mode === "coverage" ? <CoverageView coverage={coverage} /> : null}
-        {mode === "activity" ? <ActivityView activity={activity} /> : null}
+        {uiState.mode === "coverage" ? <CoverageView coverage={coverage} /> : null}
+        {uiState.mode === "activity" ? <ActivityView activity={activity} /> : null}
       </main>
     </div>
   );
@@ -447,13 +598,27 @@ function buildTaskTree(tasks: TaskView[]): TreeNode[] {
   return roots;
 }
 
-function TaskNode({ node, selectedId, onSelect, onTransition }: { node: TreeNode; selectedId: string | null; onSelect: (id: string) => void; onTransition: (task: TaskView, action: "start" | "finish" | "reopen" | "archive") => Promise<void> }) {
-  const [expanded, setExpanded] = useState(true);
+function TaskNode({
+  node,
+  selectedId,
+  collapsedTaskIds,
+  onSelect,
+  onToggleExpanded,
+  onTransition
+}: {
+  node: TreeNode;
+  selectedId: string | null;
+  collapsedTaskIds: Set<string>;
+  onSelect: (id: string) => void;
+  onToggleExpanded: (id: string) => void;
+  onTransition: (task: TaskView, action: "start" | "finish" | "reopen" | "archive") => Promise<void>;
+}) {
   const task = node.task;
+  const expanded = !collapsedTaskIds.has(task.id);
   return (
     <div className="task-node">
       <div className={selectedId === task.id ? "task-row selected" : "task-row"} style={{ paddingLeft: `${10 + task.hierarchyDepth * 22}px` }} onClick={() => onSelect(task.id)}>
-        <button className="disclosure" onClick={(event) => { event.stopPropagation(); setExpanded(!expanded); }} disabled={node.children.length === 0} title={expanded ? "Collapse" : "Expand"}>
+        <button className="disclosure" onClick={(event) => { event.stopPropagation(); onToggleExpanded(task.id); }} disabled={node.children.length === 0} title={expanded ? "Collapse" : "Expand"}>
           {node.children.length > 0 ? <ChevronDown size={15} className={expanded ? "" : "rotated"} /> : <span />}
         </button>
         <StatusDot status={task.computedStatus} />
@@ -468,6 +633,7 @@ function TaskNode({ node, selectedId, onSelect, onTransition }: { node: TreeNode
             <span>depth {task.dependencyDepth}</span>
             <span>unblocks {task.transitiveDependentsCount}</span>
             {task.descendantsCount > 0 ? <span>{task.subtreeProgress}% subtree</span> : null}
+            {getRollupStatus(task) === "blocked-by-children" ? <span className="rollup-chip">{getUnfinishedDescendantsCount(task)} child blockers</span> : null}
           </div>
         </div>
         <div className={task.assignedTrack ? "assignee-cell assigned" : "assignee-cell"}>
@@ -485,7 +651,17 @@ function TaskNode({ node, selectedId, onSelect, onTransition }: { node: TreeNode
           <button title="Archive" onClick={(event) => { event.stopPropagation(); void onTransition(task, "archive"); }}><Archive size={15} /></button>
         </div>
       </div>
-      {expanded ? node.children.map((child) => <TaskNode key={child.task.id} node={child} selectedId={selectedId} onSelect={onSelect} onTransition={onTransition} />) : null}
+      {expanded ? node.children.map((child) => (
+        <TaskNode
+          key={child.task.id}
+          node={child}
+          selectedId={selectedId}
+          collapsedTaskIds={collapsedTaskIds}
+          onSelect={onSelect}
+          onToggleExpanded={onToggleExpanded}
+          onTransition={onTransition}
+        />
+      )) : null}
     </div>
   );
 }
@@ -564,6 +740,14 @@ function TaskDetails({
         <h3>Hierarchy</h3>
         <p>Parent: {task.parent ? `${task.parent.id} ${task.parent.title}` : "root"}</p>
         <p>{task.descendantsCount} descendants, {task.finishedLeafDescendantsCount}/{task.leafDescendantsCount} leaf tasks finished.</p>
+        <p className={getRollupStatus(task) === "blocked-by-children" ? "rollup-warning" : undefined}>Rollup: {formatRollupStatus(task)}</p>
+        {getCriticalChildPath(task).length > 0 ? (
+          <div className="critical-path">
+            {getCriticalChildPath(task).map((child) => (
+              <span key={child.id}>{child.id} [{child.computedStatus}{child.unfinishedDependenciesCount > 0 ? `, ${child.unfinishedDependenciesCount} deps` : ""}]</span>
+            ))}
+          </div>
+        ) : null}
       </section>
       <section className="detail-section">
         <h3>Dependencies</h3>
@@ -736,6 +920,145 @@ function StatusDot({ status }: { status: ComputedStatus }) {
   return <span className={`status-dot ${status}`} title={status} />;
 }
 
+function formatRollupStatus(task: TaskView): string {
+  const rollupStatus = getRollupStatus(task);
+  if (rollupStatus === "leaf") {
+    return "leaf task";
+  }
+  if (rollupStatus === "complete") {
+    return "child rollup complete";
+  }
+  const unfinishedDescendantsCount = getUnfinishedDescendantsCount(task);
+  return `blocked by ${unfinishedDescendantsCount} unfinished ${unfinishedDescendantsCount === 1 ? "descendant" : "descendants"}`;
+}
+
+function getRollupStatus(task: TaskView): RollupStatus {
+  if (task.rollupStatus) {
+    return task.rollupStatus;
+  }
+  if (task.childrenCount === 0) {
+    return "leaf";
+  }
+  return getUnfinishedDescendantsCount(task) === 0 ? "complete" : "blocked-by-children";
+}
+
+function getUnfinishedDescendantsCount(task: TaskView): number {
+  return task.unfinishedDescendantsCount ?? Math.max(0, task.descendantsCount - task.subtreeFinishedCount);
+}
+
+function getCriticalChildPath(task: TaskView): NonNullable<TaskView["criticalChildPath"]> {
+  return task.criticalChildPath ?? [];
+}
+
+function normalizeAppConfig(input: unknown): AppConfig {
+  const record = isRecord(input) ? input : {};
+  const ui = isRecord(record.ui) ? record.ui : {};
+  const refreshIntervalMs = typeof ui.refreshIntervalMs === "number" && Number.isFinite(ui.refreshIntervalMs)
+    ? Math.max(1000, Math.min(600000, Math.trunc(ui.refreshIntervalMs)))
+    : DEFAULT_APP_CONFIG.ui.refreshIntervalMs;
+  const persistState = typeof ui.persistState === "boolean" ? ui.persistState : DEFAULT_APP_CONFIG.ui.persistState;
+  const issues = Array.isArray(record.issues) ? record.issues.filter((issue): issue is string => typeof issue === "string") : [];
+  return { ui: { refreshIntervalMs, persistState }, issues };
+}
+
+function usePersistentUiState(enabled: boolean): [UiState, Dispatch<SetStateAction<UiState>>] {
+  const previousEnabledRef = useRef(enabled);
+  const [state, setState] = useState<UiState>(() => {
+    if (!enabled) {
+      return DEFAULT_UI_STATE;
+    }
+    return readStoredUiState();
+  });
+
+  useEffect(() => {
+    if (!enabled) {
+      window.localStorage.removeItem(UI_STATE_KEY);
+      if (previousEnabledRef.current) {
+        setState(DEFAULT_UI_STATE);
+      }
+      previousEnabledRef.current = enabled;
+      return;
+    }
+    previousEnabledRef.current = enabled;
+    window.localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+  }, [enabled, state]);
+
+  return [state, setState];
+}
+
+function readStoredUiState(): UiState {
+  try {
+    const raw = window.localStorage.getItem(UI_STATE_KEY);
+    if (!raw) {
+      return DEFAULT_UI_STATE;
+    }
+    return normalizeUiState(JSON.parse(raw) as unknown);
+  } catch {
+    window.localStorage.removeItem(UI_STATE_KEY);
+    return DEFAULT_UI_STATE;
+  }
+}
+
+function normalizeUiState(input: unknown): UiState {
+  const record = isRecord(input) ? input : {};
+  const mode = isViewMode(record.mode) ? record.mode : DEFAULT_UI_STATE.mode;
+  const status = isStatusFilter(record.status) ? record.status : DEFAULT_UI_STATE.status;
+  const selectedId = typeof record.selectedId === "string" ? record.selectedId : null;
+  const collapsedTaskIds = Array.isArray(record.collapsedTaskIds)
+    ? [...new Set(record.collapsedTaskIds.filter((item): item is string => typeof item === "string"))]
+    : [];
+  return {
+    mode,
+    selectedId,
+    status,
+    search: typeof record.search === "string" ? record.search : "",
+    includeFinished: typeof record.includeFinished === "boolean" ? record.includeFinished : false,
+    includeArchived: typeof record.includeArchived === "boolean" ? record.includeArchived : false,
+    collapsedTaskIds,
+    scrollPositions: normalizeScrollPositions(record.scrollPositions),
+    newTaskDraft: normalizeNewTaskDraft(record.newTaskDraft),
+    newTrackDraft: typeof record.newTrackDraft === "string" ? record.newTrackDraft : "",
+    newTagDraft: typeof record.newTagDraft === "string" ? record.newTagDraft : ""
+  };
+}
+
+function normalizeScrollPositions(input: unknown): Record<string, number> {
+  if (!isRecord(input)) {
+    return {};
+  }
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function normalizeNewTaskDraft(input: unknown): UiState["newTaskDraft"] {
+  if (!isRecord(input)) {
+    return DEFAULT_UI_STATE.newTaskDraft;
+  }
+  return {
+    id: typeof input.id === "string" ? input.id : "",
+    title: typeof input.title === "string" ? input.title : "",
+    parentTaskId: typeof input.parentTaskId === "string" ? input.parentTaskId : "",
+    priority: typeof input.priority === "string" ? input.priority : "2"
+  };
+}
+
+function isViewMode(value: unknown): value is ViewMode {
+  return value === "tasks" || value === "queues" || value === "tags" || value === "coverage" || value === "activity";
+}
+
+function isStatusFilter(value: unknown): value is StatusFilter {
+  return value === "all" || value === "ready" || value === "blocked" || value === "started" || value === "finished" || value === "archived";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) {
@@ -758,4 +1081,13 @@ async function mutate(url: string, options: { method: string; body?: unknown }):
   }
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+type NotJiraWindow = Window & typeof globalThis & { __notJiraRoot?: Root };
+
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("Missing root element.");
+}
+const notJiraWindow = window as NotJiraWindow;
+const root = notJiraWindow.__notJiraRoot ?? createRoot(rootElement);
+notJiraWindow.__notJiraRoot = root;
+root.render(<StrictMode><App /></StrictMode>);

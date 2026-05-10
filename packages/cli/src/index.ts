@@ -8,7 +8,9 @@ import { Command, Option } from "commander";
 import {
   createServices,
   createSqliteStore,
+  defaultNotJiraConfigPath,
   defaultNotJiraDbPath,
+  ensureNotJiraConfig,
   formatActivity,
   formatExplain,
   formatTaskMarkdown,
@@ -16,6 +18,7 @@ import {
   MigrationService,
   NotJiraError,
   prioritySchema,
+  readNotJiraConfig,
   type ComputedStatus,
   type OutputFormat,
   type Priority,
@@ -45,15 +48,21 @@ program.command("serve")
   .action(async (options: { apiPort: number; webPort: number; host: string }) => {
     const root = findWorkspaceRoot();
     const databasePath = dbPath();
+    const config = await ensureNotJiraConfig(configPath());
     const env = {
       ...process.env,
       NOT_JIRA_DB: databasePath,
+      NOT_JIRA_CONFIG: config.path,
       NOT_JIRA_API_PORT: String(options.apiPort),
       NOT_JIRA_WEB_PORT: String(options.webPort),
       NOT_JIRA_WEB_HOST: options.host
     };
 
     console.log(`Database: ${databasePath}`);
+    console.log(`Config:   ${config.path}`);
+    for (const issue of config.issues) {
+      console.log(`Config warning: ${issue}`);
+    }
     console.log(`API:      http://localhost:${options.apiPort}`);
     console.log(`Web:      http://localhost:${options.webPort}`);
     console.log("Press Ctrl-C to stop both servers.");
@@ -73,8 +82,15 @@ program.command("doctor")
     try {
       const migration = new MigrationService(store);
       const status = await migration.status();
+      const config = await readNotJiraConfig(configPath());
       print({
         database: dbPath(),
+        config: {
+          path: config.path,
+          exists: config.exists,
+          issues: config.issues,
+          value: config.config
+        },
         appliedMigrations: status.applied.length,
         pendingMigrations: status.pending.map((item) => item.id)
       }, "json");
@@ -464,6 +480,10 @@ function openStore() {
 
 function dbPath(): string {
   return resolve(program.opts<GlobalOptions>().db ?? process.env.NOT_JIRA_DB ?? defaultNotJiraDbPath());
+}
+
+function configPath(): string {
+  return resolve(process.env.NOT_JIRA_CONFIG ?? defaultNotJiraConfigPath());
 }
 
 function format(): OutputFormat {

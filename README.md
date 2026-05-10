@@ -27,6 +27,18 @@ not-jira task list --status ready
 By default the SQLite database lives at `~/.not-jira/not-jira.sqlite`. Override
 it with `--db` or `NOT_JIRA_DB`.
 
+Runtime UI settings live in `~/.not-jira/config.json` and are created by
+`not-jira serve` if missing:
+
+```json
+{
+  "ui": {
+    "refreshIntervalMs": 5000,
+    "persistState": true
+  }
+}
+```
+
 Run the API:
 
 ```sh

@@ -71,6 +71,10 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
     lines.push(`- Tags: ${tags || "none"}`);
     lines.push(`- Source: ${source}`);
     lines.push(`- Progress: ${task.subtreeProgress}% (${task.finishedLeafDescendantsCount}/${task.leafDescendantsCount} leaf descendants finished)`);
+    lines.push(`- Rollup: ${formatRollup(task)}`);
+    if (task.criticalChildPath.length > 0) {
+      lines.push(`- Critical child path: ${formatPath(task.criticalChildPath)}`);
+    }
     lines.push(`- Dependency depth: ${task.dependencyDepth}`);
     lines.push(`- Dependencies: ${formatTaskRefs(dependencyEdges.map((edge) => edge.dependsOnTaskId), taskById)}`);
     lines.push(`- Blocks directly: ${formatTaskRefs(dependentEdges.map((edge) => edge.taskId), taskById)}`);
@@ -173,6 +177,23 @@ function formatTaskRefs(ids: string[], taskById: Map<string, TaskView>): string 
     const task = taskById.get(id);
     return task ? `\`${id}\` ${escapeInline(task.title)} [${task.computedStatus}]` : `\`${id}\``;
   }).join(", ");
+}
+
+function formatPath(path: TaskView["criticalChildPath"]): string {
+  return path.map((task) => {
+    const dependencyNote = task.unfinishedDependenciesCount > 0 ? `, ${task.unfinishedDependenciesCount} unfinished deps` : "";
+    return `\`${task.id}\` ${escapeInline(task.title)} [${task.computedStatus}${dependencyNote}]`;
+  }).join(" -> ");
+}
+
+function formatRollup(task: TaskView): string {
+  if (task.rollupStatus === "leaf") {
+    return "leaf task";
+  }
+  if (task.rollupStatus === "complete") {
+    return "child rollup complete";
+  }
+  return `blocked by ${task.unfinishedDescendantsCount} unfinished ${task.unfinishedDescendantsCount === 1 ? "descendant" : "descendants"}`;
 }
 
 function escapeInline(value: string): string {

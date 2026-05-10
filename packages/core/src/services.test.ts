@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { createMemoryStore, createServices, NotJiraError } from "./index.js";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createMemoryStore, createServices, ensureNotJiraConfig, NotJiraError, readNotJiraConfig } from "./index.js";
 
 describe("not-jira core services", () => {
+  it("creates and validates the user config file with safe defaults", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "not-jira-config-"));
+    const configPath = join(dir, "config.json");
+
+    const created = await ensureNotJiraConfig(configPath);
+    expect(created.exists).toBe(true);
+    expect(created.config.ui.refreshIntervalMs).toBe(5000);
+    expect(created.config.ui.persistState).toBe(true);
+
+    await writeFile(configPath, JSON.stringify({ ui: { refreshIntervalMs: 2500, persistState: false } }), "utf8");
+    const custom = await readNotJiraConfig(configPath);
+    expect(custom.config.ui.refreshIntervalMs).toBe(2500);
+    expect(custom.config.ui.persistState).toBe(false);
+
+    await writeFile(configPath, JSON.stringify({ ui: { refreshIntervalMs: 10 } }), "utf8");
+    const invalid = await readNotJiraConfig(configPath);
+    expect(invalid.config.ui.refreshIntervalMs).toBe(5000);
+    expect(invalid.issues.length).toBeGreaterThan(0);
+  });
+
   it("keeps readiness dependency-first while computing hierarchy progress", async () => {
     const store = createMemoryStore();
     const services = createServices(store);
@@ -18,9 +41,12 @@ describe("not-jira core services", () => {
     const capture = tasks.find((task) => task.id === "AUTH-003");
 
     expect(parent?.computedStatus).toBe("ready");
+    expect(parent?.rollupStatus).toBe("blocked-by-children");
     expect(parent?.subtreeProgress).toBe(33);
+    expect(parent?.unfinishedDescendantsCount).toBe(2);
     expect(parent?.finishedLeafDescendantsCount).toBe(1);
     expect(parent?.leafDescendantsCount).toBe(3);
+    expect(parent?.criticalChildPath.map((task) => task.id)).toEqual(["AUTH-002"]);
     expect(capture?.computedStatus).toBe("ready");
   });
 
@@ -58,6 +84,29 @@ describe("not-jira core services", () => {
     await services.tasks.add({ id: "B", parentTaskId: "A", title: "B" });
 
     await expect(services.dependencies.add("A", "B")).rejects.toBeInstanceOf(NotJiraError);
+  });
+
+  it("keeps parents open until descendants are finished without making children dependencies", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store);
+
+    await services.tasks.add({ id: "P", title: "Parent project" });
+    await services.tasks.add({ id: "C", parentTaskId: "P", title: "Child task" });
+
+    await expect(services.tasks.finish("P")).rejects.toBeInstanceOf(NotJiraError);
+
+    const explanation = await services.query.explain("P");
+    expect(explanation.task.computedStatus).toBe("ready");
+    expect(explanation.task.rollupStatus).toBe("blocked-by-children");
+    expect(explanation.task.criticalChildPath.map((task) => task.id)).toEqual(["C"]);
+    expect(explanation.unfinishedDependencies).toHaveLength(0);
+
+    await services.tasks.finish("C");
+    const afterChildFinish = await services.query.explain("P");
+    expect(afterChildFinish.task.rollupStatus).toBe("complete");
+    expect(afterChildFinish.task.subtreeProgress).toBe(100);
+
+    await expect(services.tasks.finish("P")).resolves.toMatchObject({ id: "P", lifecycle: "finished" });
   });
 
   it("allows assignment when dependencies are unfinished", async () => {
@@ -114,6 +163,8 @@ describe("not-jira core services", () => {
     expect(markdown).toContain("- Parent: ROOT Root task");
     expect(markdown).toContain("- Tags: ui");
     expect(markdown).toContain("- Source: docs/design.md - Export");
+    expect(markdown).toContain("- Rollup: blocked by 2 unfinished descendants");
+    expect(markdown).toContain("- Critical child path: `B` Blocked task [blocked, 1 unfinished deps]");
     expect(markdown).toContain("- Dependencies: `A` Dependency task [ready]");
     expect(markdown).toContain("- `B` Blocked task depends on `A` Dependency task");
     expect(markdown).toContain("### codex-a");

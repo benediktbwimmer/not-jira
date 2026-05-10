@@ -3,11 +3,13 @@ import {
   assertDependencySetHasNoCycle,
   assertNoCycle,
   assertNoParentCycle,
+  buildHierarchyIndexes,
   buildGraphIndexes,
   computeDepths,
   computeHierarchyRollups,
   computeTransitiveDependents,
   isDescendant,
+  listDescendantIds,
   sortTaskViews
 } from "./graph.js";
 import type { AppStore, RepositorySet } from "./store.js";
@@ -29,12 +31,14 @@ import {
   type JsonExport,
   type JsonImportResult,
   type Priority,
+  type RollupStatus,
   type SourceSectionCoverage,
   type Tag,
   type TagCoverage,
   type Task,
   type TaskTag,
   type TaskListFilters,
+  type TaskPathSummary,
   type TaskView,
   type Track,
   type TrackAssignment
@@ -164,7 +168,8 @@ export class TaskService {
       if (await repos.tasks.get(task.id)) {
         conflict(`Task already exists: ${task.id}`);
       }
-      await ensureParentTask(repos, task.id, task.parentTaskId);
+      const parent = await ensureParentTask(repos, task.id, task.parentTaskId);
+      ensureFinishedParentDoesNotContainUnfinishedChild(parent, task);
       await repos.tasks.create(task);
       await repos.activity.append(makeActivity("task.created", "task", task.id, `Created ${task.id}`, { title: task.title }, null));
     });
@@ -219,8 +224,9 @@ export class TaskService {
     const now = nowIso();
     const updated = await this.store.transaction(async (repos) => {
       const existing = await repos.tasks.get(taskId) ?? notFound("task", taskId);
+      let parent: Task | null | undefined;
       if (parentTaskId !== undefined) {
-        await ensureParentTask(repos, taskId, parentTaskId);
+        parent = await ensureParentTask(repos, taskId, parentTaskId);
       }
       const lifecycle = parsed.lifecycle ?? existing.lifecycle;
       const withLifecycle = applyLifecycleTimestamps(existing, lifecycle, now);
@@ -240,6 +246,11 @@ export class TaskService {
         updatedAt: now,
         version: existing.version + 1
       };
+      if (next.parentTaskId && parent === undefined) {
+        parent = await repos.tasks.get(next.parentTaskId) ?? notFound("task", next.parentTaskId);
+      }
+      ensureFinishedParentDoesNotContainUnfinishedChild(parent ?? null, next);
+      await ensureTaskCanBeFinished(repos, next);
       await repos.tasks.update(next);
       await repos.activity.append(makeActivity("task.updated", "task", taskId, `Updated ${taskId}`, { input: parsed }, null));
       if (existing.lifecycle !== next.lifecycle) {
@@ -626,6 +637,9 @@ export class QueryService {
         subtreeStartedCount: 0,
         subtreeFinishedCount: 0,
         hierarchyDepth: 0,
+        rollupStatus: "leaf",
+        unfinishedDescendantsCount: 0,
+        criticalChildPath: [],
         assignedTrack: assignment && track ? { trackId: track.id, actor: track.actor, name: track.name, position: assignment.position } : null,
         tags: [...(tagsByTask.get(task.id) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
       };
@@ -636,11 +650,14 @@ export class QueryService {
     views = views.map((task) => {
       const parentTask = task.parentTaskId ? taskById.get(task.parentTaskId) : null;
       const rollup = rollups.get(task.id);
+      const descendantsCount = rollup?.descendantsCount ?? 0;
+      const subtreeFinishedCount = rollup?.subtreeFinishedCount ?? 0;
+      const unfinishedDescendantsCount = Math.max(0, descendantsCount - subtreeFinishedCount);
       return {
         ...task,
         parent: parentTask ? { id: parentTask.id, title: parentTask.title, lifecycle: parentTask.lifecycle } : null,
         childrenCount: rollup?.childrenCount ?? 0,
-        descendantsCount: rollup?.descendantsCount ?? 0,
+        descendantsCount,
         leafDescendantsCount: rollup?.leafDescendantsCount ?? 0,
         finishedLeafDescendantsCount: rollup?.finishedLeafDescendantsCount ?? 0,
         subtreeProgress: rollup?.subtreeProgress ?? task.subtreeProgress,
@@ -648,10 +665,20 @@ export class QueryService {
         subtreeReadyCount: rollup?.subtreeReadyCount ?? 0,
         subtreeBlockedCount: rollup?.subtreeBlockedCount ?? 0,
         subtreeStartedCount: rollup?.subtreeStartedCount ?? 0,
-        subtreeFinishedCount: rollup?.subtreeFinishedCount ?? 0,
-        hierarchyDepth: rollup?.hierarchyDepth ?? 0
+        subtreeFinishedCount,
+        hierarchyDepth: rollup?.hierarchyDepth ?? 0,
+        rollupStatus: computeRollupStatus(rollup?.childrenCount ?? 0, unfinishedDescendantsCount),
+        unfinishedDescendantsCount
       };
     });
+    const hierarchy = buildHierarchyIndexes(tasks);
+    const viewById = new Map(views.map((task) => [task.id, task]));
+    views = views.map((task) => ({
+      ...task,
+      criticalChildPath: task.rollupStatus === "blocked-by-children"
+        ? computeCriticalChildPath(task.id, hierarchy.childrenByParent, viewById)
+        : []
+    }));
 
     views = this.applyFilters(views, filters);
     return sortTaskViews(views, filters.sort);
@@ -808,6 +835,65 @@ export class QueryService {
   }
 }
 
+function computeRollupStatus(childrenCount: number, unfinishedDescendantsCount: number): RollupStatus {
+  if (childrenCount === 0) {
+    return "leaf";
+  }
+  return unfinishedDescendantsCount === 0 ? "complete" : "blocked-by-children";
+}
+
+function computeCriticalChildPath(taskId: string, childrenByParent: Map<string, string[]>, viewById: Map<string, TaskView>): TaskPathSummary[] {
+  const children = (childrenByParent.get(taskId) ?? [])
+    .map((childId) => viewById.get(childId))
+    .filter((child): child is TaskView => child !== undefined && child.lifecycle !== "finished")
+    .sort(compareCriticalChildren);
+  const child = children[0];
+  if (!child) {
+    return [];
+  }
+  const summary = summarizePathTask(child);
+  if (child.childrenCount === 0 || child.blocked) {
+    return [summary];
+  }
+  return [summary, ...computeCriticalChildPath(child.id, childrenByParent, viewById)];
+}
+
+function summarizePathTask(task: TaskView): TaskPathSummary {
+  return {
+    id: task.id,
+    title: task.title,
+    lifecycle: task.lifecycle,
+    computedStatus: task.computedStatus,
+    unfinishedDependenciesCount: task.unfinishedDependenciesCount
+  };
+}
+
+function compareCriticalChildren(a: TaskView, b: TaskView): number {
+  return criticalStatusRank(a) - criticalStatusRank(b)
+    || b.unfinishedDescendantsCount - a.unfinishedDescendantsCount
+    || b.transitiveDependentsCount - a.transitiveDependentsCount
+    || b.priority - a.priority
+    || a.dependencyDepth - b.dependencyDepth
+    || a.createdAt.localeCompare(b.createdAt)
+    || a.id.localeCompare(b.id);
+}
+
+function criticalStatusRank(task: TaskView): number {
+  if (task.blocked) {
+    return 0;
+  }
+  if (task.ready) {
+    return 1;
+  }
+  if (task.computedStatus === "started") {
+    return 2;
+  }
+  if (task.rollupStatus === "blocked-by-children") {
+    return 3;
+  }
+  return 4;
+}
+
 export class ImportService {
   constructor(
     private readonly store: AppStore,
@@ -904,6 +990,7 @@ export class ImportService {
       for (const task of combinedTasks) {
         assertNoParentCycle(task.id, task.parentTaskId, combinedTasks);
       }
+      validateFinishedParents(combinedTasks);
 
       const existingDependencies = await repos.dependencies.list();
       const importedDependencyKeys = new Set(data.dependencies.map((edge) => dependencyKey(edge.taskId, edge.dependsOnTaskId)));
@@ -1065,9 +1152,9 @@ function formatCount(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-async function ensureParentTask(repos: RepositorySet, taskId: string, parentTaskId: string | null): Promise<void> {
+async function ensureParentTask(repos: RepositorySet, taskId: string, parentTaskId: string | null): Promise<Task | null> {
   if (!parentTaskId) {
-    return;
+    return null;
   }
   const parent = await repos.tasks.get(parentTaskId) ?? notFound("task", parentTaskId);
   if (parent.archivedAt) {
@@ -1075,6 +1162,50 @@ async function ensureParentTask(repos: RepositorySet, taskId: string, parentTask
   }
   const tasks = await repos.tasks.list();
   assertNoParentCycle(taskId, parentTaskId, tasks);
+  return parent;
+}
+
+function ensureFinishedParentDoesNotContainUnfinishedChild(parent: Task | null, child: Task): void {
+  if (parent?.lifecycle === "finished" && child.lifecycle !== "finished") {
+    validation("Finished parent tasks cannot contain unfinished children. Reopen the parent first.", {
+      parentTaskId: parent.id,
+      childTaskId: child.id
+    });
+  }
+}
+
+async function ensureTaskCanBeFinished(repos: RepositorySet, task: Task): Promise<void> {
+  if (task.lifecycle !== "finished") {
+    return;
+  }
+  const tasks = await repos.tasks.list();
+  const taskById = new Map(tasks.map((candidate) => [candidate.id, candidate]));
+  taskById.set(task.id, task);
+  const unfinishedDescendants = listDescendantIds(task.id, [...taskById.values()])
+    .map((descendantId) => taskById.get(descendantId))
+    .filter((candidate): candidate is Task => candidate !== undefined && candidate.lifecycle !== "finished");
+  if (unfinishedDescendants.length > 0) {
+    validation("Parent tasks cannot be finished while descendants are unfinished.", {
+      taskId: task.id,
+      unfinishedDescendants: unfinishedDescendants.map((descendant) => descendant.id)
+    });
+  }
+}
+
+function validateFinishedParents(tasks: Task[]): void {
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
+  for (const task of tasks) {
+    if (task.lifecycle !== "finished") {
+      continue;
+    }
+    const unfinishedDescendantIds = listDescendantIds(task.id, tasks).filter((descendantId) => taskById.get(descendantId)?.lifecycle !== "finished");
+    if (unfinishedDescendantIds.length > 0) {
+      validation("Finished parent tasks cannot contain unfinished descendants.", {
+        taskId: task.id,
+        unfinishedDescendants: unfinishedDescendantIds
+      });
+    }
+  }
 }
 
 async function findTrack(repos: RepositorySet, actorOrId: string): Promise<Track> {

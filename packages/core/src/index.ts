@@ -9,3 +9,4 @@ export * from "./sqlite-store.js";
 export * from "./markdown-import.js";
 export * from "./exporters.js";
 export * from "./formatters.js";
+export * from "./config.js";

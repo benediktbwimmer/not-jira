@@ -206,6 +206,12 @@ Rules:
 - Parent-child containment does not make a parent ready or blocked.
 - Readiness is still computed only from unfinished dependencies.
 - Parent tasks expose computed subtree rollups for progress and navigation.
+- Parent-child containment and dependency edges must not overlap. A parent
+  cannot depend on one of its descendants in V1; if a project needs a terminal
+  gate, model that gate as an explicit child task.
+- A parent cannot be finished while any descendant is unfinished. The parent
+  remains open because its contained scope is still open, not because children
+  are dependency blockers.
 
 Subtree progress is computed from leaf descendants:
 
@@ -228,8 +234,26 @@ started/open/blocked = 0
 
 V1 should not automatically finish a parent just because all children are
 finished. Instead, it should show the parent as finishable with
-`subtreeProgress = 100`. A stricter policy can be added later without changing
-the data model.
+`subtreeProgress = 100` and `rollupStatus = complete`.
+
+Parent rollup status is explicit:
+
+```txt
+leaf
+  the task has no children
+
+blocked-by-children
+  the task has descendants and at least one descendant is unfinished
+
+complete
+  the task has descendants and every descendant is finished
+```
+
+This status is not the same as computed readiness. A parent may be `ready`
+because its dependencies are finished while also having `rollupStatus =
+blocked-by-children` because its contained scope is not done. The UI and CLI
+should show that as "blocked by unfinished children" and include the current
+critical child path for navigation.
 
 ### 5.2 Dependency
 
@@ -546,6 +570,9 @@ subtreeReadyCount
 subtreeBlockedCount
 subtreeStartedCount
 subtreeFinishedCount
+rollupStatus
+unfinishedDescendantsCount
+criticalChildPath
 assignedTrack
 tags
 ```
@@ -597,6 +624,12 @@ siblings retain dependency-first ordering
 collapsed parents still show subtree progress and subtree status counts
 ```
 
+Parent rows should also show rollup blockers. If a parent has unfinished
+descendants, display `blocked by unfinished children` plus the unfinished
+descendant count. Detail views and `task explain` should include the current
+critical child path, preferring dependency-blocked children first, then ready
+children with the most unfinished subtree and downstream unblock impact.
+
 ## 9. Web UI
 
 The UI has three primary views:
@@ -627,6 +660,7 @@ Task list requirements:
 - clear visual distinction for ready, blocked, started, and finished tasks
 - high-priority ready tasks visually prominent
 - blocked tasks show unfinished dependency count
+- parents show unfinished child rollup count
 - selected task shows details and dependency explanation
 
 Each task row should show:
@@ -642,6 +676,7 @@ tags
 source doc/section
 dependency count
 subtree progress when descendants exist
+rollup status when descendants are unfinished
 assigned actor if any
 ```
 
@@ -784,6 +819,30 @@ Configuration:
 ```sh
 not-jira --db ./not-jira.sqlite ...
 NOT_JIRA_DB=./not-jira.sqlite
+NOT_JIRA_CONFIG=./config.json
+```
+
+The default config path is `~/.not-jira/config.json`. `not-jira serve` should
+create it with safe defaults if it does not exist:
+
+```json
+{
+  "ui": {
+    "refreshIntervalMs": 5000,
+    "persistState": true
+  }
+}
+```
+
+The server exposes public UI config at `GET /api/config`. Invalid config should
+not crash the app; the server returns defaults plus issue messages, and
+`not-jira doctor` reports the same issues.
+
+The web UI persists local view state in browser local storage when
+`ui.persistState` is true. The state key is versioned and stores the active
+view, selected task, filters, expanded/collapsed task ids, create drafts, and
+scroll positions. Data itself remains authoritative from the backend and is
+refreshed according to `ui.refreshIntervalMs`.
 ```
 
 Task commands:

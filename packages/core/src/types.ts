@@ -17,6 +17,7 @@ export type TaskSize = z.infer<typeof sizeSchema>;
 export type Priority = z.infer<typeof prioritySchema>;
 
 export type ComputedStatus = "ready" | "blocked" | "started" | "finished" | "archived";
+export type RollupStatus = "leaf" | "complete" | "blocked-by-children";
 export type SubjectType = "task" | "tag" | "track" | "import" | "export" | "system";
 export type OutputFormat = "table" | "json" | "markdown";
 export type TaskSort = "dependency" | "priority" | "depth" | "created" | "updated" | "id" | "title";
@@ -112,6 +113,14 @@ export interface ParentTaskSummary {
   lifecycle: Lifecycle;
 }
 
+export interface TaskPathSummary {
+  id: string;
+  title: string;
+  lifecycle: Lifecycle;
+  computedStatus: ComputedStatus;
+  unfinishedDependenciesCount: number;
+}
+
 export interface TaskView extends Task {
   computedStatus: ComputedStatus;
   ready: boolean;
@@ -133,6 +142,9 @@ export interface TaskView extends Task {
   subtreeStartedCount: number;
   subtreeFinishedCount: number;
   hierarchyDepth: number;
+  rollupStatus: RollupStatus;
+  unfinishedDescendantsCount: number;
+  criticalChildPath: TaskPathSummary[];
   assignedTrack: AssignedTrackView | null;
   tags: Tag[];
 }
@@ -358,4 +370,8 @@ export function defaultNotJiraDir(): string {
 
 export function defaultNotJiraDbPath(): string {
   return join(defaultNotJiraDir(), "not-jira.sqlite");
+}
+
+export function defaultNotJiraConfigPath(): string {
+  return join(defaultNotJiraDir(), "config.json");
 }

@@ -4,10 +4,13 @@ import { cors } from "hono/cors";
 import {
   createServices,
   createSqliteStore,
+  defaultNotJiraConfigPath,
   defaultNotJiraDbPath,
   formatExplain,
   MigrationService,
   NotJiraError,
+  publicNotJiraConfig,
+  readNotJiraConfig,
   type ComputedStatus,
   type Lifecycle,
   type Priority,
@@ -18,6 +21,7 @@ import {
 
 export interface ServerOptions {
   databasePath?: string | undefined;
+  configPath?: string | undefined;
 }
 
 export function createApp(options: ServerOptions = {}) {
@@ -25,6 +29,13 @@ export function createApp(options: ServerOptions = {}) {
   app.use("*", cors());
 
   app.get("/api/health", (c) => c.json({ ok: true }));
+  app.get("/api/config", async (c) => {
+    const result = await readNotJiraConfig(options.configPath ?? process.env.NOT_JIRA_CONFIG ?? defaultNotJiraConfigPath());
+    return c.json({
+      ...publicNotJiraConfig(result.config),
+      issues: result.issues
+    });
+  });
 
   app.use("/api/*", async (c, next) => {
     const store = createSqliteStore(defined({ databasePath: options.databasePath, autoMigrate: true }));
@@ -187,7 +198,10 @@ function defined<T extends Record<string, unknown>>(value: T): T {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
   serve({
-    fetch: createApp({ databasePath: process.env.NOT_JIRA_DB ?? defaultNotJiraDbPath() }).fetch,
+    fetch: createApp({
+      databasePath: process.env.NOT_JIRA_DB ?? defaultNotJiraDbPath(),
+      configPath: process.env.NOT_JIRA_CONFIG ?? defaultNotJiraConfigPath()
+    }).fetch,
     port
   });
   console.log(`not-jira API listening on http://localhost:${port}`);
