@@ -8,12 +8,15 @@ import type {
   DependencyRepository,
   MigrationRepository,
   ProjectRepository,
+  QueueFeedRepository,
   RepositorySet,
+  InstructionRepository,
+  SavedViewRepository,
   TagRepository,
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Lifecycle, Migration, Priority, Project, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Dependency, Instruction, Lifecycle, Migration, Priority, Project, QueueFeed, SavedView, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
 import { defaultUnblockDbPath, nowIso } from "./types.js";
 
 type SqliteDatabase = Database.Database;
@@ -119,12 +122,47 @@ interface ProjectRow {
   archived_at: string | null;
 }
 
+interface InstructionRow {
+  project_id: string;
+  id: string;
+  name: string;
+  query: string;
+  body: string;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+interface SavedViewRow {
+  project_id: string;
+  id: string;
+  name: string;
+  query: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+interface QueueFeedRow {
+  project_id: string;
+  id: string;
+  name: string;
+  query: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
 export class SqliteStore implements AppStore {
   readonly projects: ProjectRepository;
   readonly tasks: TaskRepository;
   readonly dependencies: DependencyRepository;
   readonly tags: TagRepository;
   readonly tracks: TrackRepository;
+  readonly instructions: InstructionRepository;
+  readonly views: SavedViewRepository;
+  readonly feeds: QueueFeedRepository;
   readonly activity: ActivityRepository;
   readonly migrations: MigrationRepository;
 
@@ -140,6 +178,9 @@ export class SqliteStore implements AppStore {
     this.dependencies = new SqliteDependencyRepository(this.db);
     this.tags = new SqliteTagRepository(this.db);
     this.tracks = new SqliteTrackRepository(this.db);
+    this.instructions = new SqliteInstructionRepository(this.db);
+    this.views = new SqliteSavedViewRepository(this.db);
+    this.feeds = new SqliteQueueFeedRepository(this.db);
     this.activity = new SqliteActivityRepository(this.db);
     this.migrations = new SqliteMigrationRepository(this.db);
   }
@@ -417,6 +458,99 @@ class SqliteActivityRepository implements ActivityRepository {
   }
 }
 
+class SqliteInstructionRepository implements InstructionRepository {
+  constructor(private readonly db: SqliteDatabase) {}
+
+  async list(projectId?: string): Promise<Instruction[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from instructions where project_id = ? order by name asc, id asc").all(projectId)
+      : this.db.prepare("select * from instructions order by project_id, name asc, id asc").all();
+    return rows.map((row) => instructionFromRow(row as InstructionRow));
+  }
+
+  async get(projectId: string, id: string): Promise<Instruction | null> {
+    const row = this.db.prepare("select * from instructions where project_id = ? and id = ?").get(projectId, id) as InstructionRow | undefined;
+    return row ? instructionFromRow(row) : null;
+  }
+
+  async create(instruction: Instruction): Promise<void> {
+    this.db.prepare(`
+      insert into instructions (project_id, id, name, query, body, enabled, created_at, updated_at, archived_at)
+      values (@projectId, @id, @name, @query, @body, @enabled, @createdAt, @updatedAt, @archivedAt)
+    `).run({ ...instruction, enabled: instruction.enabled ? 1 : 0 });
+  }
+
+  async update(instruction: Instruction): Promise<void> {
+    this.db.prepare(`
+      update instructions
+      set name = @name, query = @query, body = @body, enabled = @enabled, updated_at = @updatedAt, archived_at = @archivedAt
+      where project_id = @projectId and id = @id
+    `).run({ ...instruction, enabled: instruction.enabled ? 1 : 0 });
+  }
+}
+
+class SqliteSavedViewRepository implements SavedViewRepository {
+  constructor(private readonly db: SqliteDatabase) {}
+
+  async list(projectId?: string): Promise<SavedView[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from saved_views where project_id = ? order by name asc, id asc").all(projectId)
+      : this.db.prepare("select * from saved_views order by project_id, name asc, id asc").all();
+    return rows.map((row) => savedViewFromRow(row as SavedViewRow));
+  }
+
+  async get(projectId: string, id: string): Promise<SavedView | null> {
+    const row = this.db.prepare("select * from saved_views where project_id = ? and id = ?").get(projectId, id) as SavedViewRow | undefined;
+    return row ? savedViewFromRow(row) : null;
+  }
+
+  async create(view: SavedView): Promise<void> {
+    this.db.prepare(`
+      insert into saved_views (project_id, id, name, query, created_at, updated_at, archived_at)
+      values (@projectId, @id, @name, @query, @createdAt, @updatedAt, @archivedAt)
+    `).run(view);
+  }
+
+  async update(view: SavedView): Promise<void> {
+    this.db.prepare(`
+      update saved_views
+      set name = @name, query = @query, updated_at = @updatedAt, archived_at = @archivedAt
+      where project_id = @projectId and id = @id
+    `).run(view);
+  }
+}
+
+class SqliteQueueFeedRepository implements QueueFeedRepository {
+  constructor(private readonly db: SqliteDatabase) {}
+
+  async list(projectId?: string): Promise<QueueFeed[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from queue_feeds where project_id = ? order by name asc, id asc").all(projectId)
+      : this.db.prepare("select * from queue_feeds order by project_id, name asc, id asc").all();
+    return rows.map((row) => queueFeedFromRow(row as QueueFeedRow));
+  }
+
+  async get(projectId: string, id: string): Promise<QueueFeed | null> {
+    const row = this.db.prepare("select * from queue_feeds where project_id = ? and id = ?").get(projectId, id) as QueueFeedRow | undefined;
+    return row ? queueFeedFromRow(row) : null;
+  }
+
+  async create(feed: QueueFeed): Promise<void> {
+    this.db.prepare(`
+      insert into queue_feeds (project_id, id, name, query, created_at, updated_at, archived_at)
+      values (@projectId, @id, @name, @query, @createdAt, @updatedAt, @archivedAt)
+    `).run(feed);
+  }
+
+  async update(feed: QueueFeed): Promise<void> {
+    this.db.prepare(`
+      update queue_feeds
+      set name = @name, query = @query, updated_at = @updatedAt, archived_at = @archivedAt
+      where project_id = @projectId and id = @id
+    `).run(feed);
+  }
+}
+
 class SqliteMigrationRepository implements MigrationRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
@@ -548,6 +682,44 @@ function activityFromRow(row: ActivityRow): Activity {
     machine: row.machine,
     actor: row.actor,
     createdAt: row.created_at
+  };
+}
+
+function instructionFromRow(row: InstructionRow): Instruction {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    name: row.name,
+    query: row.query,
+    body: row.body,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
+  };
+}
+
+function savedViewFromRow(row: SavedViewRow): SavedView {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    name: row.name,
+    query: row.query,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
+  };
+}
+
+function queueFeedFromRow(row: QueueFeedRow): QueueFeed {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    name: row.name,
+    query: row.query,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
   };
 }
 

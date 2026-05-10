@@ -13,6 +13,7 @@ import {
   ensureUnblockConfig,
   formatActivity,
   formatExplain,
+  formatInstructionQueryGrammar,
   formatTaskMarkdown,
   formatTaskTable,
   MigrationService,
@@ -21,6 +22,9 @@ import {
   readUnblockConfig,
   updateUnblockConfig,
   type ComputedStatus,
+  type EditInstructionInput,
+  type EditQueueFeedInput,
+  type EditSavedViewInput,
   type OutputFormat,
   type Priority,
   type TaskListFilters,
@@ -263,6 +267,8 @@ task.command("edit")
 task.command("list")
   .description("List tasks")
   .option("--search <query>", "search text")
+  .option("--where <query>", "advanced matcher query")
+  .option("--view <id>", "saved view id")
   .option("--status <status>", "ready, blocked, started, finished, archived, open")
   .option("--lifecycle <lifecycle>", "open, started, finished")
   .option("--priority-min <n>", "minimum priority", parsePriority)
@@ -278,8 +284,10 @@ task.command("list")
   .option("--sort <sort>", "dependency, priority, depth, created, updated, id, title")
   .action(async (options) => withServices(async ({ services }) => {
     const parentTaskId = options.parent === undefined ? undefined : options.parent === "root" ? null : options.parent;
+    const viewQuery = options.view ? (await services.views.get(options.view)).query : undefined;
     const filters = defined({
       search: options.search,
+      where: combineMatcherQueries(viewQuery, options.where),
       status: options.status as ComputedStatus | "open" | undefined,
       lifecycle: options.lifecycle,
       priorityMin: options.priorityMin,
@@ -379,6 +387,72 @@ task.command("restore")
   .argument("<id>")
   .description("Restore an archived task")
   .action(async (id) => withMutationServices(async ({ services }) => print(await services.tasks.restore(id), format())));
+
+for (const bulkLifecycleCommand of [
+  ["bulk-start", "start"],
+  ["bulk-finish", "finish"],
+  ["bulk-reopen", "reopen"],
+  ["bulk-archive", "archive"]
+] as const) {
+  task.command(bulkLifecycleCommand[0])
+    .description(`Run ${bulkLifecycleCommand[1]} on tasks matched by a query`)
+    .requiredOption("--where <query>", "advanced matcher query")
+    .requiredOption("--limit <n>", "maximum tasks to mutate", parseInteger)
+    .action(async (options) => withMutationServices(async ({ services }) => {
+      const selected = await selectTasksByWhere(services, options.where, options.limit);
+      const updated = [];
+      for (const item of selected) {
+        if (bulkLifecycleCommand[1] === "start") updated.push(await services.tasks.start(item.id));
+        if (bulkLifecycleCommand[1] === "finish") updated.push(await services.tasks.finish(item.id));
+        if (bulkLifecycleCommand[1] === "reopen") updated.push(await services.tasks.reopen(item.id));
+        if (bulkLifecycleCommand[1] === "archive") updated.push(await services.tasks.archive(item.id));
+      }
+      print({ action: bulkLifecycleCommand[1], matched: selected.length, ids: selected.map((taskItem) => taskItem.id), updated }, format());
+    }));
+}
+
+task.command("bulk-assign")
+  .description("Assign tasks matched by a query to an actor queue")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .requiredOption("--limit <n>", "maximum tasks to mutate", parseInteger)
+  .requiredOption("--to <actorOrId>", "actor queue id, actor, or machine:actor")
+  .action(async (options) => withMutationServices(async ({ services }) => {
+    const selected = await selectTasksByWhere(services, options.where, options.limit);
+    const assignments = [];
+    for (const item of selected) {
+      assignments.push(await services.tracks.assign(options.to, item.id));
+    }
+    print({ action: "assign", matched: selected.length, ids: selected.map((taskItem) => taskItem.id), assignments }, format());
+  }));
+
+task.command("bulk-unassign")
+  .description("Unassign tasks matched by a query from their current actor queues")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .requiredOption("--limit <n>", "maximum tasks to mutate", parseInteger)
+  .action(async (options) => withMutationServices(async ({ services }) => {
+    const selected = await selectTasksByWhere(services, options.where, options.limit);
+    const ids: string[] = [];
+    for (const item of selected) {
+      if (item.assignedTrack) {
+        await services.tracks.unassign(item.assignedTrack.trackId, item.id);
+        ids.push(item.id);
+      }
+    }
+    print({ action: "unassign", matched: selected.length, changed: ids.length, ids }, format());
+  }));
+
+task.command("bulk-tag")
+  .description("Assign a tag to tasks matched by a query")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .requiredOption("--limit <n>", "maximum tasks to mutate", parseInteger)
+  .requiredOption("--tag <tag>", "tag id or name")
+  .action(async (options) => withMutationServices(async ({ services }) => {
+    const selected = await selectTasksByWhere(services, options.where, options.limit);
+    for (const item of selected) {
+      await services.tags.assign(item.id, [options.tag]);
+    }
+    print({ action: "tag", matched: selected.length, ids: selected.map((taskItem) => taskItem.id), tag: options.tag }, format());
+  }));
 
 task.command("delete")
   .argument("<id>")
@@ -484,6 +558,190 @@ track.command("show")
     print({ track: selected, tasks }, format());
   }));
 
+const instruction = program.command("instruction")
+  .description("Instruction commands")
+  .addHelpText("after", `
+Project scope:
+  Pass --project <id> on every instruction command. Mutations also require --actor <name>.
+
+${formatInstructionQueryGrammar()}`);
+
+instruction.command("add")
+  .requiredOption("--name <name>", "instruction name")
+  .requiredOption("--when <query>", "task matcher query")
+  .requiredOption("--body <text>", "instruction markdown body")
+  .option("--id <id>", "instruction id")
+  .option("--disabled", "create disabled")
+  .action(async (options) => withMutationServices(async ({ services }) => {
+    print(await services.instructions.add({ id: options.id, name: options.name, query: options.when, body: options.body, enabled: !options.disabled }), format());
+  }));
+
+instruction.command("edit")
+  .argument("<id>")
+  .option("--name <name>", "instruction name")
+  .option("--when <query>", "task matcher query")
+  .option("--body <text>", "instruction markdown body")
+  .option("--enabled <value>", "true or false")
+  .action(async (id, options) => withMutationServices(async ({ services }) => {
+    const input: EditInstructionInput = defined({ name: options.name, query: options.when, body: options.body });
+    if (options.enabled !== undefined) {
+      input.enabled = options.enabled === "true";
+    }
+    print(await services.instructions.edit(id, input), format());
+  }));
+
+instruction.command("list")
+  .option("--include-archived", "show archived instructions")
+  .action(async (options) => withServices(async ({ services }) => print(await services.instructions.list(Boolean(options.includeArchived)), format())));
+
+instruction.command("show")
+  .argument("<id>")
+  .action(async (id) => withServices(async ({ services }) => print(await services.instructions.get(id), format())));
+
+instruction.command("archive")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.instructions.archive(id), format())));
+
+instruction.command("restore")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.instructions.restore(id), format())));
+
+instruction.command("preview")
+  .requiredOption("--when <query>", "task matcher query")
+  .action(async (options) => withServices(async ({ services }) => print(await services.instructions.preview(options.when), format())));
+
+instruction.command("suggest")
+  .argument("<field>", "matcher field")
+  .requiredOption("--limit <n>", "maximum suggestions to return", parseInteger)
+  .option("--prefix <text>", "only values starting with this prefix")
+  .action(async (field, options) => withServices(async ({ services }) => {
+    print(await services.instructions.suggest(field, { prefix: options.prefix, limit: options.limit }), format());
+  }));
+
+instruction.command("matches")
+  .argument("<taskId>")
+  .action(async (taskId) => withServices(async ({ services }) => print(await services.instructions.matchesForTask(taskId), format())));
+
+program.command("query")
+  .description("List tasks matched by an advanced matcher query")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .requiredOption("--limit <n>", "maximum tasks to return", parseInteger)
+  .option("--include-finished", "include finished tasks")
+  .option("--include-archived", "include archived tasks")
+  .option("--sort <sort>", "dependency, priority, depth, created, updated, id, title")
+  .addHelpText("after", `
+Project scope:
+  Pass --project <id>. Project context is never sticky.
+
+${formatInstructionQueryGrammar()}`)
+  .action(async (options) => withServices(async ({ services }) => {
+    const filters = defined({
+      includeFinished: options.includeFinished,
+      includeArchived: options.includeArchived,
+      sort: options.sort as TaskSort | undefined
+    }) as Omit<TaskListFilters, "where">;
+    const tasks = await services.query.match(options.where, options.limit, filters);
+    printTasks(tasks);
+  }));
+
+program.command("context")
+  .description("Print a markdown task context bundle matched by a query")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .requiredOption("--limit <n>", "maximum tasks to include", parseInteger)
+  .action(async (options) => withServices(async ({ services }) => {
+    console.log(await services.exports.markdown({ where: options.where, limit: options.limit }));
+  }));
+
+const view = program.command("view")
+  .description("Saved task view commands")
+  .addHelpText("after", `
+Project scope:
+  Pass --project <id> on every saved view command. Mutations also require --actor <name>.
+
+${formatInstructionQueryGrammar()}`);
+
+view.command("add")
+  .requiredOption("--name <name>", "saved view name")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .option("--id <id>", "saved view id")
+  .action(async (options) => withMutationServices(async ({ services }) => print(await services.views.add({ id: options.id, name: options.name, query: options.where }), format())));
+
+view.command("edit")
+  .argument("<id>")
+  .option("--name <name>", "saved view name")
+  .option("--where <query>", "advanced matcher query")
+  .action(async (id, options) => withMutationServices(async ({ services }) => {
+    const input: EditSavedViewInput = defined({ name: options.name, query: options.where });
+    print(await services.views.edit(id, input), format());
+  }));
+
+view.command("list")
+  .option("--include-archived", "show archived saved views")
+  .action(async (options) => withServices(async ({ services }) => print(await services.views.list(Boolean(options.includeArchived)), format())));
+
+view.command("show")
+  .argument("<id>")
+  .action(async (id) => withServices(async ({ services }) => print(await services.views.get(id), format())));
+
+view.command("archive")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.views.archive(id), format())));
+
+view.command("restore")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.views.restore(id), format())));
+
+view.command("tasks")
+  .argument("<id>")
+  .requiredOption("--limit <n>", "maximum tasks to return", parseInteger)
+  .action(async (id, options) => withServices(async ({ services }) => printTasks(await services.views.tasks(id, options.limit))));
+
+const feed = program.command("feed")
+  .description("Query-backed queue feed commands")
+  .addHelpText("after", `
+Project scope:
+  Pass --project <id> on every queue feed command. Mutations also require --actor <name>.
+
+Feeds are saved matcher queries for ready task candidates.
+
+${formatInstructionQueryGrammar()}`);
+
+feed.command("add")
+  .requiredOption("--name <name>", "queue feed name")
+  .requiredOption("--where <query>", "advanced matcher query")
+  .option("--id <id>", "queue feed id")
+  .action(async (options) => withMutationServices(async ({ services }) => print(await services.feeds.add({ id: options.id, name: options.name, query: options.where }), format())));
+
+feed.command("edit")
+  .argument("<id>")
+  .option("--name <name>", "queue feed name")
+  .option("--where <query>", "advanced matcher query")
+  .action(async (id, options) => withMutationServices(async ({ services }) => {
+    const input: EditQueueFeedInput = defined({ name: options.name, query: options.where });
+    print(await services.feeds.edit(id, input), format());
+  }));
+
+feed.command("list")
+  .option("--include-archived", "show archived queue feeds")
+  .action(async (options) => withServices(async ({ services }) => print(await services.feeds.list(Boolean(options.includeArchived)), format())));
+
+feed.command("show")
+  .argument("<id>")
+  .action(async (id) => withServices(async ({ services }) => print(await services.feeds.get(id), format())));
+
+feed.command("archive")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.feeds.archive(id), format())));
+
+feed.command("restore")
+  .argument("<id>")
+  .action(async (id) => withMutationServices(async ({ services }) => print(await services.feeds.restore(id), format())));
+
+feed.command("tasks")
+  .argument("<id>")
+  .requiredOption("--limit <n>", "maximum candidate tasks to return", parseInteger)
+  .action(async (id, options) => withServices(async ({ services }) => printTasks(await services.feeds.tasks(id, options.limit))));
+
 const imports = program.command("import")
   .description("Import data")
   .addHelpText("after", `
@@ -523,8 +781,13 @@ exports.command("json")
 
 exports.command("markdown")
   .argument("<file>")
-  .action(async (file) => withServices(async ({ services }) => {
-    await writeFile(file, await services.exports.markdown());
+  .option("--where <query>", "advanced matcher query")
+  .option("--limit <n>", "maximum tasks to include; required with --where", parseInteger)
+  .action(async (file, options) => withServices(async ({ services }) => {
+    if (options.where && options.limit === undefined) {
+      throw new UnblockError("validation", "Exporting by query requires --limit <n>.");
+    }
+    await writeFile(file, await services.exports.markdown({ where: options.where, limit: options.limit }));
     console.log(`Wrote ${file}`);
   }));
 
@@ -660,6 +923,19 @@ function print(value: unknown, outputFormat: OutputFormat): void {
     return;
   }
   console.log(JSON.stringify(value, null, 2));
+}
+
+function combineMatcherQueries(left?: string, right?: string): string | undefined {
+  const first = left?.trim();
+  const second = right?.trim();
+  if (first && second) {
+    return `(${first}) and (${second})`;
+  }
+  return first || second || undefined;
+}
+
+async function selectTasksByWhere(services: ReturnType<typeof createServices>, where: string, limit: number) {
+  return services.query.match(where, limit, { includeFinished: true, includeArchived: true, sort: "dependency" });
 }
 
 function parseInteger(value: string): number {

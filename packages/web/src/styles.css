@@ -202,17 +202,23 @@ textarea {
 }
 
 .toolbar {
-  min-height: 58px;
+  min-height: 96px;
   background: #ffffff;
   border-bottom: 1px solid #d9dee8;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
   gap: 10px;
   padding: 10px 16px;
   position: sticky;
   top: 0;
   z-index: 3;
+}
+
+.toolbar-main-row,
+.toolbar-matcher-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .search-wrap {
@@ -232,6 +238,65 @@ textarea {
   padding: 0;
   flex: 1;
   min-width: 0;
+}
+
+.toolbar-matcher-row select {
+  flex: 0 0 150px;
+}
+
+.top-matcher {
+  flex: 1 1 620px;
+  min-width: 240px;
+  height: 36px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #c5ccd8;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #ffffff;
+  position: relative;
+}
+
+.matcher-icon-button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #657083;
+}
+
+.matcher-icon-button:hover {
+  background: transparent;
+  color: #1f6feb;
+}
+
+.top-matcher.dirty {
+  border-color: #8bb7ef;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 14%);
+}
+
+.top-matcher .monaco-editor,
+.top-matcher .monaco-editor-background,
+.top-matcher .monaco-editor .inputarea.ime-input {
+  background: transparent;
+}
+
+.matcher-placeholder {
+  position: absolute;
+  left: 43px;
+  top: 8px;
+  color: #8b95a5;
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.matcher-shortcut {
+  white-space: nowrap;
+  color: #657083;
 }
 
 .status-tabs {
@@ -1071,6 +1136,28 @@ h3 {
   padding: 14px;
 }
 
+.feed-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  padding: 14px 14px 0;
+}
+
+.feed-card {
+  border: 1px solid #dfe5ef;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  background: #f8fafc;
+}
+
+.feed-card h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
 .queue-column {
   border: 1px solid #e2e6ee;
   border-radius: 8px;
@@ -1128,6 +1215,316 @@ h3 {
 .coverage-table {
   display: grid;
   padding: 14px;
+}
+
+.instruction-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(300px, 360px);
+  gap: 14px;
+  padding: 14px;
+}
+
+.instruction-list-panel,
+.instruction-editor-panel,
+.instruction-grammar-panel {
+  background: #ffffff;
+  border: 1px solid #d9dee8;
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.instruction-list {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.instruction-list-item {
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  gap: 10px;
+  border-color: #e2e6ee;
+}
+
+.instruction-list-item.active {
+  border-color: #2f7dd1;
+  box-shadow: inset 3px 0 0 #2f7dd1;
+}
+
+.instruction-list-item div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.instruction-list-item strong,
+.instruction-list-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instruction-list-item div span {
+  color: #657083;
+  font-size: 12px;
+}
+
+.instruction-editor-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  align-content: start;
+}
+
+.instruction-grammar-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  align-self: start;
+  padding: 14px;
+  position: sticky;
+  top: 72px;
+  max-height: calc(100vh - 86px);
+  overflow: auto;
+}
+
+.instruction-grammar-panel p {
+  color: #657083;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.instruction-grammar-panel section {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid #e2e6ee;
+  padding-top: 12px;
+}
+
+.instruction-grammar-panel ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #4b5565;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.grammar-chip-list,
+.grammar-examples,
+.grammar-clause-list,
+.grammar-value-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.grammar-chip-list code,
+.grammar-examples code,
+.grammar-clause code {
+  background: #eef1f5;
+  color: #394456;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.grammar-examples,
+.grammar-clause-list,
+.grammar-value-list {
+  display: grid;
+}
+
+.grammar-clause {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e2e6ee;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.grammar-clause strong,
+.grammar-value-list strong {
+  color: #18212f;
+}
+
+.instruction-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  border-bottom: 1px solid #e2e6ee;
+  padding-bottom: 14px;
+}
+
+.instruction-editor-header p,
+.view-heading p {
+  color: #657083;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.instruction-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(140px, 0.5fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.instruction-form label,
+.instruction-body-block,
+.instruction-query-block {
+  display: grid;
+  gap: 6px;
+}
+
+.instruction-form label span,
+.field-heading {
+  color: #657083;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.toggle-row {
+  min-height: 34px;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle-row input {
+  min-height: 0;
+}
+
+.field-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.field-heading code {
+  color: #4b5565;
+  background: #eef1f5;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut-hint {
+  color: #657083;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+kbd {
+  border: 1px solid #c5ccd8;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #394456;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 5px;
+}
+
+.monaco-shell {
+  border: 1px solid #c5ccd8;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.instruction-body-block textarea {
+  min-height: 150px;
+}
+
+.instruction-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #e2e6ee;
+  padding-top: 12px;
+}
+
+.instruction-help h3 {
+  width: 100%;
+}
+
+.instruction-help code {
+  background: #eef1f5;
+  color: #394456;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.instruction-preview {
+  border-top: 1px solid #e2e6ee;
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.match-list,
+.instruction-match-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.match-row {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  border-color: #e2e6ee;
+  min-height: 48px;
+}
+
+.match-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.match-row strong,
+.match-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-row span {
+  color: #657083;
+  font-size: 12px;
+}
+
+.instruction-card {
+  border: 1px solid #d9e5df;
+  background: #f6fbf8;
+  border-radius: 6px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.instruction-card-header {
+  display: grid;
+  gap: 2px;
+}
+
+.instruction-card-header span {
+  color: #657083;
+  font-size: 12px;
+}
+
+.compact {
+  margin: 0;
 }
 
 .tag-row,
@@ -1215,8 +1612,17 @@ h3 {
     grid-template-columns: 1fr;
   }
 
+  .instruction-layout {
+    grid-template-columns: 1fr;
+  }
+
   .details-panel {
     position: static;
+  }
+
+  .instruction-grammar-panel {
+    position: static;
+    max-height: none;
   }
 
   .create-main {
@@ -1224,8 +1630,12 @@ h3 {
   }
 
   .toolbar {
-    flex-wrap: wrap;
     height: auto;
+  }
+
+  .toolbar-main-row,
+  .toolbar-matcher-row {
+    flex-wrap: wrap;
   }
 
   .status-tabs {
@@ -1262,6 +1672,7 @@ h3 {
 
   .detail-grid,
   .create-main,
+  .instruction-form,
   .coverage-row,
   .activity-row,
   .tag-row {
@@ -1284,10 +1695,16 @@ h3 {
   select,
   textarea,
   .search-wrap,
+  .top-matcher,
   .status-tabs {
     background: #202630;
     border-color: #3a4555;
     color: #edf2f7;
+  }
+
+  .top-matcher.dirty {
+    border-color: #72a9ef;
+    box-shadow: 0 0 0 2px rgb(96 165 250 / 18%);
   }
 
   .status-tab {
@@ -1325,17 +1742,30 @@ h3 {
   .toolbar,
   .task-list-panel,
   .details-panel,
-  .wide-view {
+  .wide-view,
+  .instruction-list-panel,
+  .instruction-editor-panel,
+  .instruction-grammar-panel {
     background: #181c23;
+    border-color: #303846;
+  }
+
+  .feed-card {
+    background: #202630;
     border-color: #303846;
   }
 
   .panel-heading,
   .view-heading,
+  .instruction-editor-header,
+  .instruction-grammar-panel section,
+  .grammar-clause,
   .task-create-row,
   .task-list-header,
   .task-row,
   .detail-section,
+  .instruction-help,
+  .instruction-preview,
   .tag-row,
   .activity-row,
   .coverage-row {
@@ -1362,6 +1792,16 @@ h3 {
 
   h3,
   .panel-heading p,
+  .view-heading p,
+  .instruction-editor-header p,
+  .instruction-grammar-panel p,
+  .instruction-grammar-panel ul,
+  .instruction-form label span,
+  .field-heading,
+  .shortcut-hint,
+  .instruction-list-item div span,
+  .match-row span,
+  .instruction-card-header span,
   .task-list-header,
   .task-meta,
   .details-panel.empty,
@@ -1388,7 +1828,13 @@ h3 {
   .details-meta span,
   .progress,
   .tag-chip,
-  .more-chip {
+  .more-chip,
+  .field-heading code,
+  .instruction-help code,
+  .grammar-chip-list code,
+  .grammar-examples code,
+  .grammar-clause code,
+  kbd {
     background: #252c36;
   }
 
@@ -1404,24 +1850,53 @@ h3 {
   .tag-chip,
   .more-chip,
   .dependency-item,
-  .task-mini {
+  .task-mini,
+  .instruction-list-item,
+  .match-row,
+  .monaco-shell,
+  kbd {
     border-color: #3a4555;
     color: #d5dce7;
   }
 
   .metric-box,
   .queue-column,
-  .task-mini {
+  .task-mini,
+  .instruction-card,
+  .grammar-clause {
     border-color: #2a3240;
   }
 
-  .task-mini {
+  .task-mini,
+  .instruction-list-item,
+  .match-row {
     background: #202630;
   }
 
-  .task-mini.clickable:hover {
+  .task-mini.clickable:hover,
+  .match-row:hover,
+  .instruction-list-item:hover {
     background: #252c36;
     border-color: #4a5668;
+  }
+
+  .instruction-list-item.active {
+    border-color: #4f91d8;
+    box-shadow: inset 3px 0 0 #4f91d8;
+  }
+
+  .instruction-card {
+    background: #12251f;
+  }
+
+  .field-heading code,
+  .instruction-help code,
+  .grammar-chip-list code,
+  .grammar-examples code,
+  .grammar-clause code,
+  .grammar-clause strong,
+  .grammar-value-list strong {
+    color: #d5dce7;
   }
 
   .primary-actions,

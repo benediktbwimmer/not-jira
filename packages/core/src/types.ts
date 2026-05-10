@@ -18,7 +18,7 @@ export type Priority = z.infer<typeof prioritySchema>;
 
 export type ComputedStatus = "ready" | "blocked" | "started" | "finished" | "archived";
 export type RollupStatus = "leaf" | "complete" | "blocked-by-children";
-export type SubjectType = "project" | "task" | "tag" | "track" | "import" | "export" | "system";
+export type SubjectType = "project" | "task" | "tag" | "track" | "instruction" | "view" | "feed" | "import" | "export" | "system";
 export type OutputFormat = "table" | "json" | "markdown";
 export type TaskSort = "dependency" | "priority" | "depth" | "created" | "updated" | "id" | "title";
 
@@ -114,6 +114,38 @@ export interface Activity {
   createdAt: string;
 }
 
+export interface Instruction {
+  projectId: string;
+  id: string;
+  name: string;
+  query: string;
+  body: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface SavedView {
+  projectId: string;
+  id: string;
+  name: string;
+  query: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface QueueFeed {
+  projectId: string;
+  id: string;
+  name: string;
+  query: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
 export interface Migration {
   id: string;
   name: string;
@@ -179,10 +211,70 @@ export interface DependencyExplanation {
   transitiveDependentsCount: number;
   assignable: boolean;
   reason: string;
+  instructions: InstructionMatch[];
+}
+
+export interface InstructionMatch {
+  instruction: Instruction;
+  task: TaskView;
+  reasons: string[];
+}
+
+export interface AddInstructionInput {
+  id?: string;
+  name: string;
+  query: string;
+  body: string;
+  enabled?: boolean;
+}
+
+export interface EditInstructionInput {
+  name?: string;
+  query?: string;
+  body?: string;
+  enabled?: boolean;
+}
+
+export interface AddSavedViewInput {
+  id?: string;
+  name: string;
+  query: string;
+}
+
+export interface EditSavedViewInput {
+  name?: string;
+  query?: string;
+}
+
+export interface AddQueueFeedInput {
+  id?: string;
+  name: string;
+  query: string;
+}
+
+export interface EditQueueFeedInput {
+  name?: string;
+  query?: string;
+}
+
+export interface InstructionPreview {
+  ok: boolean;
+  query: string;
+  errors: string[];
+  matches: InstructionMatch[];
+}
+
+export interface InstructionFieldValueSuggestion {
+  field: string;
+  value: string;
+  label: string;
+  detail: string;
+  count: number;
 }
 
 export interface TaskListFilters {
   search?: string;
+  where?: string;
   status?: ComputedStatus | "open";
   lifecycle?: Lifecycle;
   priorityMin?: Priority;
@@ -312,6 +404,8 @@ export interface JsonImportResult {
   tagsUpdated: number;
   tracksCreated: number;
   tracksUpdated: number;
+  instructionsCreated: number;
+  instructionsUpdated: number;
   dependenciesAdded: number;
   taskTagsAdded: number;
   assignmentsAdded: number;
@@ -326,6 +420,9 @@ export interface JsonExport {
   taskTags: TaskTag[];
   tracks: Track[];
   assignments: TrackAssignment[];
+  instructions?: Instruction[];
+  views?: SavedView[];
+  feeds?: QueueFeed[];
   activity?: Activity[];
 }
 

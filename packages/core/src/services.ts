@@ -21,6 +21,9 @@ import {
   normalizeId,
   slugify,
   type AddProjectInput,
+  type AddInstructionInput,
+  type AddQueueFeedInput,
+  type AddSavedViewInput,
   type Activity,
   type AddTagInput,
   type AddTaskInput,
@@ -28,13 +31,22 @@ import {
   type Dependency,
   type DependencyExplanation,
   type EditTaskInput,
+  type EditInstructionInput,
+  type EditQueueFeedInput,
+  type EditSavedViewInput,
   type ImportIssue,
+  type Instruction,
+  type InstructionMatch,
+  type InstructionPreview,
   type ImportResult,
   type JsonExport,
   type JsonImportResult,
+  type InstructionFieldValueSuggestion,
   type Priority,
   type Project,
+  type QueueFeed,
   type RollupStatus,
+  type SavedView,
   type SourceSectionCoverage,
   type Tag,
   type TagCoverage,
@@ -49,6 +61,7 @@ import {
 import { conflict, notFound, validation } from "./errors.js";
 import { parseMarkdownTracker } from "./markdown-import.js";
 import { exportMarkdown, exportStoreJson } from "./exporters.js";
+import { instructionQueryGrammar, matchInstructionQuery, validateInstructionQuery } from "./instruction-query.js";
 
 export interface Services {
   projects: ProjectService;
@@ -56,6 +69,9 @@ export interface Services {
   dependencies: DependencyService;
   tags: TagService;
   tracks: TrackService;
+  instructions: InstructionService;
+  views: SavedViewService;
+  feeds: QueueFeedService;
   query: QueryService;
   imports: ImportService;
   exports: ExportService;
@@ -77,9 +93,12 @@ export function createServices(store: AppStore, options: ServiceOptions = {}): S
   const dependencies = new DependencyService(store, activity, projectId);
   const tags = new TagService(store, activity, projectId);
   const tracks = new TrackService(store, activity, query, projectId);
+  const instructions = new InstructionService(store, activity, query, projectId);
+  const views = new SavedViewService(store, activity, query, projectId);
+  const feeds = new QueueFeedService(store, activity, query, projectId);
   const imports = new ImportService(store, activity, tasks, tracks, projectId);
   const exports = new ExportService(store, projectId);
-  return { projects, tasks, dependencies, tags, tracks, query, imports, exports, activity };
+  return { projects, tasks, dependencies, tags, tracks, instructions, views, feeds, query, imports, exports, activity };
 }
 
 function makeActivity(projectId: string | null, type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown>, provenance: { machine: string; actor: string }): Activity {
@@ -474,7 +493,7 @@ export class TagService {
     const now = nowIso();
     const tag: Tag = {
       projectId: this.projectId,
-      id: input.id ? normalizeId(input.id) : slugify(input.name),
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
       name: input.name.trim(),
       color: input.color ?? null,
       description: input.description ?? null,
@@ -654,6 +673,361 @@ export class TrackService {
   }
 }
 
+export class InstructionService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
+
+  async add(input: AddInstructionInput): Promise<Instruction> {
+    const errors = validateInstructionQuery(input.query);
+    if (errors.length > 0) {
+      validation("Instruction query is invalid.", { errors });
+    }
+    const now = nowIso();
+    const instruction: Instruction = {
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+      name: input.name.trim(),
+      query: input.query.trim(),
+      body: input.body,
+      enabled: input.enabled ?? true,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    if (!instruction.name) {
+      validation("Instruction name is required.");
+    }
+    await this.store.transaction(async (repos) => {
+      if (await repos.instructions.get(this.projectId, instruction.id)) {
+        conflict(`Instruction already exists: ${instruction.id}`);
+      }
+      const existing = (await repos.instructions.list(this.projectId)).find((item) => item.name === instruction.name);
+      if (existing) {
+        conflict(`Instruction name already exists: ${instruction.name}`);
+      }
+      await repos.instructions.create(instruction);
+      await repos.activity.append(this.activity.make(this.projectId, "instruction.created", "instruction", instruction.id, `Created instruction ${instruction.name}`, { query: instruction.query }));
+    });
+    return instruction;
+  }
+
+  async edit(idInput: string, input: EditInstructionInput): Promise<Instruction> {
+    const id = normalizeId(idInput);
+    if (input.query !== undefined) {
+      const errors = validateInstructionQuery(input.query);
+      if (errors.length > 0) {
+        validation("Instruction query is invalid.", { errors });
+      }
+    }
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.instructions.get(this.projectId, id) ?? notFound("instruction", id);
+      const next: Instruction = {
+        ...existing,
+        name: input.name?.trim() ?? existing.name,
+        query: input.query?.trim() ?? existing.query,
+        body: input.body ?? existing.body,
+        enabled: input.enabled ?? existing.enabled,
+        updatedAt: now
+      };
+      if (!next.name) {
+        validation("Instruction name is required.");
+      }
+      const duplicateName = (await repos.instructions.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
+      if (duplicateName) {
+        conflict(`Instruction name already exists: ${next.name}`);
+      }
+      await repos.instructions.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "instruction.updated", "instruction", next.id, `Updated instruction ${next.name}`));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<Instruction> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.instructions.get(this.projectId, id) ?? notFound("instruction", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.instructions.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "instruction.archived", "instruction", id, `Archived instruction ${existing.name}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<Instruction> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.instructions.get(this.projectId, id) ?? notFound("instruction", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.instructions.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "instruction.restored", "instruction", id, `Restored instruction ${existing.name}`));
+      return next;
+    });
+  }
+
+  async list(includeArchived = false): Promise<Instruction[]> {
+    return (await this.store.instructions.list(this.projectId)).filter((instruction) => includeArchived || !instruction.archivedAt);
+  }
+
+  async get(idInput: string): Promise<Instruction> {
+    const id = normalizeId(idInput);
+    return await this.store.instructions.get(this.projectId, id) ?? notFound("instruction", id);
+  }
+
+  async preview(query: string): Promise<InstructionPreview> {
+    return this.query.previewInstructionQuery(query);
+  }
+
+  async matchesForTask(taskIdInput: string): Promise<InstructionMatch[]> {
+    const taskId = normalizeId(taskIdInput);
+    const matches = await this.query.matchingInstructions();
+    return matches.filter((match) => match.task.id === taskId);
+  }
+
+  async suggest(fieldInput: string, input: { prefix?: string; limit: number }): Promise<InstructionFieldValueSuggestion[]> {
+    const field = normalizeInstructionSuggestionField(fieldInput);
+    const limit = normalizeSuggestionLimit(input.limit);
+    const prefix = input.prefix?.trim().toLowerCase() ?? "";
+    const tasks = await this.query.list({ includeFinished: true });
+    const counts = new Map<string, InstructionFieldValueSuggestion>();
+    const add = (valueInput: string | null | undefined, detail: string, count = 1) => {
+      const value = valueInput?.trim();
+      if (!value) {
+        return;
+      }
+      if (prefix && !value.toLowerCase().startsWith(prefix)) {
+        return;
+      }
+      const key = `${field}\u0000${value.toLowerCase()}`;
+      const existing = counts.get(key);
+      if (existing) {
+        existing.count += count;
+      } else {
+        counts.set(key, { field, value, label: value, detail, count });
+      }
+    };
+
+    if (field === "status") {
+      for (const status of ["ready", "blocked", "started", "finished"]) add(status, "computed status", 0);
+    } else if (field === "lifecycle") {
+      for (const lifecycle of ["open", "started", "finished"]) add(lifecycle, "lifecycle", 0);
+    } else if (field === "priority") {
+      for (const priority of [0, 1, 2, 3, 4]) {
+        add(String(priority), "priority", 0);
+        add(`P${priority}`, "priority label", 0);
+      }
+    } else if (["created", "updated", "started", "finished", "archived"].includes(field)) {
+      add("now", "current instant", 0);
+      add("today", "local day start", 0);
+      add("now - 30m", "relative time", 0);
+      add("now - 6h", "relative time", 0);
+      add("now - 2d", "relative time", 0);
+      add("now - 1w", "relative time", 0);
+    }
+
+    for (const task of tasks) {
+      if (field === "id") add(task.id, "task id");
+      if (field === "id prefix") {
+        for (const prefixValue of idPrefixes(task.id)) add(prefixValue, "task id prefix");
+      }
+      if (field === "tag") {
+        for (const tag of task.tags) {
+          add(tag.name, "tag name");
+          add(tag.id, "tag id");
+        }
+      }
+      if (field === "assigned" && task.assignedTrack) {
+        add(formatActorRef(task.assignedTrack), "machine:actor");
+      }
+      if (field === "machine" && task.assignedTrack) add(task.assignedTrack.machine, "assigned machine");
+      if (field === "actor" && task.assignedTrack) add(task.assignedTrack.actor, "assigned actor");
+      if (field === "parent") add(task.parentTaskId ?? "root", task.parentTaskId ? "parent task id" : "root parent");
+      if (field === "source doc") add(task.sourceDoc, "source doc");
+      if (field === "source section") add(task.sourceSection, "source section");
+    }
+
+    return [...counts.values()]
+      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+      .slice(0, limit);
+  }
+}
+
+export class SavedViewService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
+
+  async add(input: AddSavedViewInput): Promise<SavedView> {
+    const errors = validateInstructionQuery(input.query);
+    if (errors.length > 0) {
+      validation("Saved view query is invalid.", { errors });
+    }
+    const now = nowIso();
+    const view: SavedView = {
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+      name: input.name.trim(),
+      query: input.query.trim(),
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    if (!view.name) validation("Saved view name is required.");
+    await this.store.transaction(async (repos) => {
+      if (await repos.views.get(this.projectId, view.id)) conflict(`Saved view already exists: ${view.id}`);
+      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.name === view.name);
+      if (duplicate) conflict(`Saved view name already exists: ${view.name}`);
+      await repos.views.create(view);
+      await repos.activity.append(this.activity.make(this.projectId, "view.created", "view", view.id, `Created saved view ${view.name}`, { query: view.query }));
+    });
+    return view;
+  }
+
+  async edit(idInput: string, input: EditSavedViewInput): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    if (input.query !== undefined) {
+      const errors = validateInstructionQuery(input.query);
+      if (errors.length > 0) validation("Saved view query is invalid.", { errors });
+    }
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next: SavedView = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
+      if (!next.name) validation("Saved view name is required.");
+      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
+      if (duplicate) conflict(`Saved view name already exists: ${next.name}`);
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.updated", "view", next.id, `Updated saved view ${next.name}`));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.archived", "view", id, `Archived saved view ${existing.name}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.restored", "view", id, `Restored saved view ${existing.name}`));
+      return next;
+    });
+  }
+
+  async list(includeArchived = false): Promise<SavedView[]> {
+    return (await this.store.views.list(this.projectId)).filter((view) => includeArchived || !view.archivedAt);
+  }
+
+  async get(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    return await this.store.views.get(this.projectId, id) ?? notFound("saved view", id);
+  }
+
+  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
+    const view = await this.get(idInput);
+    return limit === undefined ? this.query.list({ where: view.query }) : (await this.query.list({ where: view.query })).slice(0, limit);
+  }
+}
+
+export class QueueFeedService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
+
+  async add(input: AddQueueFeedInput): Promise<QueueFeed> {
+    const errors = validateInstructionQuery(input.query);
+    if (errors.length > 0) {
+      validation("Queue feed query is invalid.", { errors });
+    }
+    const now = nowIso();
+    const feed: QueueFeed = {
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+      name: input.name.trim(),
+      query: input.query.trim(),
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    if (!feed.name) validation("Queue feed name is required.");
+    await this.store.transaction(async (repos) => {
+      if (await repos.feeds.get(this.projectId, feed.id)) conflict(`Queue feed already exists: ${feed.id}`);
+      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.name === feed.name);
+      if (duplicate) conflict(`Queue feed name already exists: ${feed.name}`);
+      await repos.feeds.create(feed);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.created", "feed", feed.id, `Created queue feed ${feed.name}`, { query: feed.query }));
+    });
+    return feed;
+  }
+
+  async edit(idInput: string, input: EditQueueFeedInput): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    if (input.query !== undefined) {
+      const errors = validateInstructionQuery(input.query);
+      if (errors.length > 0) validation("Queue feed query is invalid.", { errors });
+    }
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next: QueueFeed = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
+      if (!next.name) validation("Queue feed name is required.");
+      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
+      if (duplicate) conflict(`Queue feed name already exists: ${next.name}`);
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.updated", "feed", next.id, `Updated queue feed ${next.name}`));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.archived", "feed", id, `Archived queue feed ${existing.name}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.restored", "feed", id, `Restored queue feed ${existing.name}`));
+      return next;
+    });
+  }
+
+  async list(includeArchived = false): Promise<QueueFeed[]> {
+    return (await this.store.feeds.list(this.projectId)).filter((feed) => includeArchived || !feed.archivedAt);
+  }
+
+  async get(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    return await this.store.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+  }
+
+  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
+    const feed = await this.get(idInput);
+    const tasks = await this.query.list({ where: feed.query, status: "ready" });
+    return limit === undefined ? tasks : tasks.slice(0, limit);
+  }
+}
+
 export class QueryService {
   constructor(private readonly store: AppStore, private readonly projectId: string) {}
 
@@ -780,7 +1154,16 @@ export class QueryService {
     }));
 
     views = this.applyFilters(views, filters);
+    if (filters.where?.trim()) {
+      const queryMatches = new Set(matchInstructionQuery(filters.where, views, activeDependencies).map((match) => match.task.id));
+      views = views.filter((task) => queryMatches.has(task.id));
+    }
     return sortTaskViews(views, filters.sort);
+  }
+
+  async match(query: string, limit: number, filters: Omit<TaskListFilters, "where"> = {}): Promise<TaskView[]> {
+    const normalizedLimit = normalizeQueryLimit(limit);
+    return (await this.list({ ...filters, where: query })).slice(0, normalizedLimit);
   }
 
   async explain(idInput: string): Promise<DependencyExplanation> {
@@ -818,8 +1201,56 @@ export class QueryService {
       directDependents,
       transitiveDependentsCount: task.transitiveDependentsCount,
       assignable,
-      reason
+      reason,
+      instructions: (await this.matchingInstructions()).filter((match) => match.task.id === task.id)
     };
+  }
+
+  async previewInstructionQuery(query: string): Promise<InstructionPreview> {
+    const errors = validateInstructionQuery(query);
+    if (errors.length > 0) {
+      return { ok: false, query, errors, matches: [] };
+    }
+    const [tasks, dependencies] = await Promise.all([
+      this.list({ includeArchived: true, includeFinished: true }),
+      this.store.dependencies.list(this.projectId)
+    ]);
+    return {
+      ok: true,
+      query,
+      errors: [],
+      matches: matchInstructionQuery(query, tasks, dependencies).map((match) => ({
+        instruction: {
+          projectId: this.projectId,
+          id: "__preview__",
+          name: "Preview",
+          query,
+          body: "",
+          enabled: true,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+          archivedAt: null
+        },
+        task: match.task,
+        reasons: match.reasons
+      }))
+    };
+  }
+
+  async matchingInstructions(): Promise<InstructionMatch[]> {
+    const [instructions, tasks, dependencies] = await Promise.all([
+      this.store.instructions.list(this.projectId),
+      this.list({ includeArchived: true, includeFinished: true }),
+      this.store.dependencies.list(this.projectId)
+    ]);
+    const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
+    const matches: InstructionMatch[] = [];
+    for (const instruction of enabled) {
+      for (const match of matchInstructionQuery(instruction.query, tasks, dependencies)) {
+        matches.push({ instruction, task: match.task, reasons: match.reasons });
+      }
+    }
+    return matches.sort((a, b) => a.instruction.name.localeCompare(b.instruction.name) || a.task.id.localeCompare(b.task.id));
   }
 
   async sourceCoverage(): Promise<SourceSectionCoverage[]> {
@@ -1087,6 +1518,8 @@ export class ImportService {
     let tagsUpdated = 0;
     let tracksCreated = 0;
     let tracksUpdated = 0;
+    let instructionsCreated = 0;
+    let instructionsUpdated = 0;
     let dependenciesAdded = 0;
     let taskTagsAdded = 0;
     let assignmentsAdded = 0;
@@ -1126,6 +1559,8 @@ export class ImportService {
       const existingTagById = new Map(existingTags.map((tag) => [tag.id, tag]));
       const existingTracks = await repos.tracks.list(this.projectId);
       const existingTrackById = new Map(existingTracks.map((track) => [track.id, track]));
+      const existingInstructions = await repos.instructions.list(this.projectId);
+      const existingInstructionById = new Map(existingInstructions.map((instruction) => [instruction.id, instruction]));
       const existingTaskTags = new Set((await repos.tags.listTaskTags(this.projectId)).map((taskTag) => taskTagKey(taskTag.taskId, taskTag.tagId)));
       const existingAssignments = new Map((await repos.tracks.listAssignments(this.projectId)).map((assignment) => [assignment.taskId, assignment]));
 
@@ -1162,6 +1597,20 @@ export class ImportService {
         } else {
           await repos.tracks.create(track);
           tracksCreated += 1;
+        }
+      }
+
+      for (const instruction of data.instructions ?? []) {
+        const errors = validateInstructionQuery(instruction.query);
+        if (errors.length > 0) {
+          validation("Imported instruction query is invalid.", { instructionId: instruction.id, errors });
+        }
+        if (existingInstructionById.has(instruction.id)) {
+          await repos.instructions.update(instruction);
+          instructionsUpdated += 1;
+        } else {
+          await repos.instructions.create(instruction);
+          instructionsCreated += 1;
         }
       }
 
@@ -1218,6 +1667,8 @@ export class ImportService {
         tagsUpdated,
         tracksCreated,
         tracksUpdated,
+        instructionsCreated,
+        instructionsUpdated,
         dependenciesAdded,
         taskTagsAdded,
         assignmentsAdded,
@@ -1233,6 +1684,8 @@ export class ImportService {
       tagsUpdated,
       tracksCreated,
       tracksUpdated,
+      instructionsCreated,
+      instructionsUpdated,
       dependenciesAdded,
       taskTagsAdded,
       assignmentsAdded,
@@ -1249,14 +1702,36 @@ export class ExportService {
     return exportStoreJson(this.store, includeActivity, this.projectId);
   }
 
-  async markdown(): Promise<string> {
+  async markdown(options: { where?: string; limit?: number } = {}): Promise<string> {
     const query = new QueryService(this.store, this.projectId);
-    const [tasks, data] = await Promise.all([
-      query.list({ includeFinished: true, includeArchived: true }),
+    const filters: TaskListFilters = { includeFinished: true, includeArchived: true };
+    if (options.where) {
+      filters.where = options.where;
+    }
+    const [rawTasks, data] = await Promise.all([
+      query.list(filters),
       this.json(false)
     ]);
-    return exportMarkdown(tasks, data);
+    const tasks = options.limit === undefined ? rawTasks : rawTasks.slice(0, normalizeQueryLimit(options.limit));
+    return exportMarkdown(tasks, scopeExportData(data, new Set(tasks.map((task) => task.id))));
   }
+}
+
+function scopeExportData(data: JsonExport, taskIds: Set<string>): JsonExport {
+  const trackIds = new Set(data.assignments.filter((assignment) => taskIds.has(assignment.taskId)).map((assignment) => assignment.trackId));
+  const tagIds = new Set(data.taskTags.filter((taskTag) => taskIds.has(taskTag.taskId)).map((taskTag) => taskTag.tagId));
+  const scoped: JsonExport = {
+    tasks: data.tasks.filter((task) => taskIds.has(task.id)),
+    dependencies: data.dependencies.filter((dependency) => taskIds.has(dependency.taskId) && taskIds.has(dependency.dependsOnTaskId)),
+    tags: data.tags.filter((tag) => tagIds.has(tag.id)),
+    taskTags: data.taskTags.filter((taskTag) => taskIds.has(taskTag.taskId) && tagIds.has(taskTag.tagId)),
+    tracks: data.tracks.filter((track) => trackIds.has(track.id)),
+    assignments: data.assignments.filter((assignment) => taskIds.has(assignment.taskId) && trackIds.has(assignment.trackId))
+  };
+  if (data.instructions) scoped.instructions = data.instructions;
+  if (data.views) scoped.views = data.views;
+  if (data.feeds) scoped.feeds = data.feeds;
+  return scoped;
 }
 
 async function ensureTaskPair(repos: RepositorySet, projectId: string, taskId: string, dependsOnTaskId: string): Promise<void> {
@@ -1272,6 +1747,38 @@ async function ensureTaskPair(repos: RepositorySet, projectId: string, taskId: s
 
 function formatCount(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function normalizeInstructionSuggestionField(input: string): string {
+  const normalized = input.trim().toLowerCase().replace(/\s+/g, " ");
+  const fields: string[] = instructionQueryGrammar().fields;
+  if (!fields.includes(normalized)) {
+    validation("Unknown instruction matcher field.", { field: input, fields });
+  }
+  return normalized;
+}
+
+function normalizeSuggestionLimit(input: number): number {
+  if (!Number.isInteger(input) || input < 1) {
+    validation("Suggestion limit must be a positive integer.", { limit: input });
+  }
+  return Math.min(input, 500);
+}
+
+function normalizeQueryLimit(input: number): number {
+  if (!Number.isInteger(input) || input < 1) {
+    validation("Query limit must be a positive integer.", { limit: input });
+  }
+  return Math.min(input, 1000);
+}
+
+function idPrefixes(id: string): string[] {
+  const parts = id.split("-");
+  const prefixes: string[] = [];
+  for (let index = 1; index < parts.length; index += 1) {
+    prefixes.push(parts.slice(0, index).join("-"));
+  }
+  return prefixes;
 }
 
 async function ensureParentTask(repos: RepositorySet, projectId: string, taskId: string, parentTaskId: string | null): Promise<Task | null> {
@@ -1401,13 +1908,28 @@ function normalizeJsonImport(input: unknown, now: string): JsonExport {
     actors.add(actorKey);
   }
 
+  const instructions = ensureArray(record.instructions, "instructions").map((instruction) => normalizeImportedInstruction(instruction, now));
+  const instructionIds = new Set<string>();
+  const instructionNames = new Set<string>();
+  for (const instruction of instructions) {
+    if (instructionIds.has(instruction.id)) {
+      validation("JSON import contains duplicate instruction ids.", { instructionId: instruction.id });
+    }
+    if (instructionNames.has(instruction.name)) {
+      validation("JSON import contains duplicate instruction names.", { name: instruction.name });
+    }
+    instructionIds.add(instruction.id);
+    instructionNames.add(instruction.name);
+  }
+
   return {
     tasks,
     dependencies: ensureArray(record.dependencies, "dependencies").map((dependency) => normalizeImportedDependency(dependency, now)),
     tags,
     taskTags: ensureArray(record.taskTags, "taskTags").map((taskTag) => normalizeImportedTaskTag(taskTag, now)),
     tracks,
-    assignments: ensureArray(record.assignments, "assignments").map((assignment) => normalizeImportedAssignment(assignment, now))
+    assignments: ensureArray(record.assignments, "assignments").map((assignment) => normalizeImportedAssignment(assignment, now)),
+    instructions
   };
 }
 
@@ -1420,6 +1942,9 @@ function scopeJsonExport(data: JsonExport, projectId: string): JsonExport {
     tracks: data.tracks.map((track) => ({ ...track, projectId })),
     assignments: data.assignments.map((assignment) => ({ ...assignment, projectId }))
   };
+  if (data.instructions) {
+    scoped.instructions = data.instructions.map((instruction) => ({ ...instruction, projectId }));
+  }
   if (data.activity) {
     scoped.activity = data.activity.map((activity) => ({
       ...activity,
@@ -1534,6 +2059,23 @@ function normalizeImportedAssignment(input: unknown, now: string): TrackAssignme
   };
 }
 
+function normalizeImportedInstruction(input: unknown, now: string): Instruction {
+  const record = requireRecord(input, "instruction");
+  const name = stringField(record, "name").trim();
+  const query = stringField(record, "query").trim();
+  return {
+    projectId: DEFAULT_PROJECT_ID,
+    id: normalizeId(optionalStringField(record, "id") ?? slugify(name)),
+    name,
+    query,
+    body: optionalStringField(record, "body") ?? "",
+    enabled: booleanField(record, "enabled") ?? true,
+    createdAt: optionalStringField(record, "createdAt") ?? now,
+    updatedAt: optionalStringField(record, "updatedAt") ?? now,
+    archivedAt: optionalStringField(record, "archivedAt")
+  };
+}
+
 function validateDependencyGraph(tasks: Task[], dependencies: Dependency[]): void {
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const seen = new Set<string>();
@@ -1617,6 +2159,17 @@ function numberField(record: Record<string, unknown>, field: string): number | u
   }
   if (typeof value !== "number" || !Number.isFinite(value)) {
     validation(`JSON import field must be a number: ${field}`);
+  }
+  return value;
+}
+
+function booleanField(record: Record<string, unknown>, field: string): boolean | undefined {
+  const value = record[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    validation(`JSON import field must be a boolean: ${field}`);
   }
   return value;
 }

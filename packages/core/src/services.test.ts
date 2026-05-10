@@ -220,6 +220,148 @@ describe("unblock core services", () => {
     expect(explanation.reason).toBe("Task can be assigned, but 1 dependency is unfinished.");
   });
 
+  it("matches instructions dynamically across metadata, hierarchy, and dependency graph predicates", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "ROOT", title: "Root work" });
+    await services.tasks.add({ id: "DEP", parentTaskId: "ROOT", title: "Dependency" });
+    await services.tasks.add({ id: "WORK", title: "Implementation work", priority: 3 });
+    await services.dependencies.add("WORK", "DEP");
+    await services.tags.add({ id: "BACKEND", name: "backend" });
+    await services.tags.assign("WORK", ["BACKEND"]);
+    await services.tracks.add({ actor: "codex-a" });
+    await services.tracks.assign("codex-a", "WORK");
+
+    const backend = await services.instructions.add({
+      name: "Backend note",
+      query: "tag in (backend, frontend) and assigned = test-machine:codex-a",
+      body: "Use the backend checklist."
+    });
+    await services.instructions.add({
+      name: "Root sequencing",
+      query: "depends on DEP and priority >= 3",
+      body: "This sees explicit and hierarchy dependency edges."
+    });
+    await services.instructions.add({
+      name: "Direct dependency only",
+      query: "depends on DEP depth = 1",
+      body: "Direct explicit dependency."
+    });
+
+    const explanation = await services.query.explain("WORK");
+    expect(explanation.instructions.map((match) => match.instruction.name)).toEqual([
+      "Backend note",
+      "Direct dependency only",
+      "Root sequencing"
+    ]);
+    expect(explanation.instructions.find((match) => match.instruction.id === backend.id)?.reasons).toContain("tag in backend, frontend");
+
+    const preview = await services.instructions.preview("unblocks WORK");
+    expect(preview.ok).toBe(true);
+    expect(preview.matches.map((match) => match.task.id)).toEqual(["DEP"]);
+
+    const tagSuggestions = await services.instructions.suggest("tag", { prefix: "back", limit: 5 });
+    expect(tagSuggestions.map((suggestion) => suggestion.value)).toContain("backend");
+    const idSuggestions = await services.instructions.suggest("id", { prefix: "WO", limit: 1 });
+    expect(idSuggestions).toEqual([expect.objectContaining({ value: "WORK" })]);
+    const assignedSuggestions = await services.instructions.suggest("assigned", { prefix: "test", limit: 5 });
+    expect(assignedSuggestions.map((suggestion) => suggestion.value)).toEqual(["test-machine:codex-a"]);
+  });
+
+  it("round-trips instructions through JSON import and export", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+    const now = "2026-05-02T00:00:00.000Z";
+
+    const result = await services.imports.json("instructions.json", {
+      tasks: [{ id: "A", title: "A", lifecycle: "open", priority: 2, createdAt: now, updatedAt: now, version: 1 }],
+      instructions: [{
+        id: "BACKEND-NOTE",
+        name: "Backend note",
+        query: "id = A",
+        body: "Remember the checklist.",
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null
+      }]
+    });
+
+    expect(result.instructionsCreated).toBe(1);
+    const exported = await services.exports.json();
+    expect(exported.instructions?.map((instruction) => instruction.id)).toEqual(["BACKEND-NOTE"]);
+    expect((await services.query.explain("A")).instructions[0]?.instruction.body).toBe("Remember the checklist.");
+  });
+
+  it("uses the matcher language for queries, saved views, queue feeds, and context export", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "API", title: "API work", priority: 1 });
+    await services.tasks.add({ id: "WEB", title: "Web work", priority: 3 });
+    await services.tasks.add({ id: "LATER", title: "Later work", priority: 4 });
+    await services.dependencies.add("LATER", "API");
+    await services.tags.add({ id: "BACKEND", name: "backend" });
+    await services.tags.assign("API", ["BACKEND"]);
+
+    await services.views.add({ name: "Backend", query: "tag = backend" });
+    await services.feeds.add({ name: "High priority ready", query: "priority >= 3" });
+
+    expect((await services.query.match("tag = backend", 10)).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.views.tasks("BACKEND", 10)).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.feeds.tasks("HIGH-PRIORITY-READY", 10)).map((task) => task.id)).toEqual(["WEB"]);
+
+    const markdown = await services.exports.markdown({ where: "tag = backend", limit: 10 });
+    expect(markdown).toContain("### `API` API work");
+    expect(markdown).not.toContain("### `WEB` Web work");
+  });
+
+  it("matches lifecycle timestamps with presence, dates, and relative time", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+    const now = "2026-05-10T10:00:00.000Z";
+
+    await services.imports.json("time.json", {
+      tasks: [
+        {
+          id: "TODAY",
+          title: "Created today",
+          lifecycle: "open",
+          priority: 2,
+          createdAt: now,
+          updatedAt: now,
+          startedAt: null,
+          finishedAt: null,
+          archivedAt: null,
+          version: 1
+        },
+        {
+          id: "OLD",
+          title: "Old started work",
+          lifecycle: "started",
+          priority: 2,
+          createdAt: "2020-01-01T10:00:00.000Z",
+          updatedAt: "2020-01-02T10:00:00.000Z",
+          startedAt: "2020-01-01T11:00:00.000Z",
+          finishedAt: null,
+          archivedAt: null,
+          version: 1
+        }
+      ],
+      dependencies: [],
+      tags: [],
+      taskTags: [],
+      tracks: [],
+      assignments: []
+    });
+
+    expect((await services.query.match("created = 2026-05-10", 10, { includeFinished: true })).map((task) => task.id)).toEqual(["TODAY"]);
+    expect((await services.query.match("started is empty", 10, { includeFinished: true })).map((task) => task.id)).toEqual(["TODAY"]);
+    expect((await services.query.match("started is not empty", 10, { includeFinished: true })).map((task) => task.id)).toEqual(["OLD"]);
+    expect((await services.query.match("updated < now - 1w", 10, { includeFinished: true })).map((task) => task.id)).toEqual(["OLD"]);
+  });
+
   it("exports markdown as a complete readable graph report", async () => {
     const store = createMemoryStore();
     const services = createServices(store, { machine: "test-machine", actor: "test-actor" });

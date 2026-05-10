@@ -7,6 +7,7 @@ import {
   defaultUnblockConfigPath,
   defaultUnblockDbPath,
   formatExplain,
+  instructionQueryGrammar,
   MigrationService,
   UnblockError,
   publicUnblockConfig,
@@ -102,9 +103,22 @@ export function createApp(options: ServerOptions = {}) {
       assignedActor: query.actor,
       includeFinished: query.includeFinished === "true",
       includeArchived: query.includeArchived === "true",
+      where: query.where,
       sort: query.sort as TaskSort | undefined
     }) as TaskListFilters;
     return c.json(await services.query.list(filters));
+  });
+
+  app.get("/api/query", async (c) => {
+    const services = await scopedServices(c);
+    const where = c.req.query("where") ?? "";
+    const limit = parseRequiredInteger(c.req.query("limit"), "limit");
+    const filters = defined({
+      includeFinished: c.req.query("includeFinished") === "true",
+      includeArchived: c.req.query("includeArchived") === "true",
+      sort: c.req.query("sort") as TaskSort | undefined
+    }) as Omit<TaskListFilters, "where">;
+    return c.json(await services.query.match(where, limit, filters));
   });
 
   app.post("/api/tasks", async (c) => {
@@ -181,12 +195,48 @@ export function createApp(options: ServerOptions = {}) {
   });
 
   app.get("/api/activity", async (c) => c.json(await (await scopedServices(c)).activity.list(Number(c.req.query("limit") ?? 100))));
+  app.get("/api/instructions/grammar", (c) => c.json(instructionQueryGrammar()));
+  app.get("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.list(c.req.query("includeArchived") === "true")));
+  app.post("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.add(await c.req.json()), 201));
+  app.get("/api/instructions/suggest", async (c) => {
+    const field = c.req.query("field") ?? "";
+    const limit = Number(c.req.query("limit"));
+    const input: { prefix?: string; limit: number } = { limit };
+    const prefix = c.req.query("prefix");
+    if (prefix !== undefined) {
+      input.prefix = prefix;
+    }
+    return c.json(await (await scopedServices(c)).instructions.suggest(field, input));
+  });
+  app.get("/api/instructions/:id", async (c) => c.json(await (await scopedServices(c)).instructions.get(c.req.param("id"))));
+  app.patch("/api/instructions/:id", async (c) => c.json(await (await scopedServices(c)).instructions.edit(c.req.param("id"), await c.req.json())));
+  app.post("/api/instructions/:id/archive", async (c) => c.json(await (await scopedServices(c)).instructions.archive(c.req.param("id"))));
+  app.post("/api/instructions/:id/restore", async (c) => c.json(await (await scopedServices(c)).instructions.restore(c.req.param("id"))));
+  app.post("/api/instructions/preview", async (c) => {
+    const body = await c.req.json<{ query: string }>();
+    return c.json(await (await scopedServices(c)).instructions.preview(body.query ?? ""));
+  });
+  app.get("/api/tasks/:id/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.matchesForTask(c.req.param("id"))));
+  app.get("/api/views", async (c) => c.json(await (await scopedServices(c)).views.list(c.req.query("includeArchived") === "true")));
+  app.post("/api/views", async (c) => c.json(await (await scopedServices(c)).views.add(await c.req.json()), 201));
+  app.get("/api/views/:id", async (c) => c.json(await (await scopedServices(c)).views.get(c.req.param("id"))));
+  app.patch("/api/views/:id", async (c) => c.json(await (await scopedServices(c)).views.edit(c.req.param("id"), await c.req.json())));
+  app.post("/api/views/:id/archive", async (c) => c.json(await (await scopedServices(c)).views.archive(c.req.param("id"))));
+  app.post("/api/views/:id/restore", async (c) => c.json(await (await scopedServices(c)).views.restore(c.req.param("id"))));
+  app.get("/api/views/:id/tasks", async (c) => c.json(await (await scopedServices(c)).views.tasks(c.req.param("id"), parseOptionalInteger(c.req.query("limit")))));
+  app.get("/api/feeds", async (c) => c.json(await (await scopedServices(c)).feeds.list(c.req.query("includeArchived") === "true")));
+  app.post("/api/feeds", async (c) => c.json(await (await scopedServices(c)).feeds.add(await c.req.json()), 201));
+  app.get("/api/feeds/:id", async (c) => c.json(await (await scopedServices(c)).feeds.get(c.req.param("id"))));
+  app.patch("/api/feeds/:id", async (c) => c.json(await (await scopedServices(c)).feeds.edit(c.req.param("id"), await c.req.json())));
+  app.post("/api/feeds/:id/archive", async (c) => c.json(await (await scopedServices(c)).feeds.archive(c.req.param("id"))));
+  app.post("/api/feeds/:id/restore", async (c) => c.json(await (await scopedServices(c)).feeds.restore(c.req.param("id"))));
+  app.get("/api/feeds/:id/tasks", async (c) => c.json(await (await scopedServices(c)).feeds.tasks(c.req.param("id"), parseOptionalInteger(c.req.query("limit")))));
   app.post("/api/import/markdown", async (c) => {
     const body = await c.req.json<{ filePath: string; markdown: string; dryRun?: boolean }>();
     return c.json(await (await scopedServices(c)).imports.markdown(body.filePath, body.markdown, Boolean(body.dryRun)));
   });
   app.post("/api/export/json", async (c) => c.json(await (await scopedServices(c)).exports.json(c.req.query("includeActivity") === "true")));
-  app.post("/api/export/markdown", async (c) => c.text(await (await scopedServices(c)).exports.markdown()));
+  app.post("/api/export/markdown", async (c) => c.text(await (await scopedServices(c)).exports.markdown(defined({ where: c.req.query("where"), limit: parseOptionalInteger(c.req.query("limit")) }) as { where?: string; limit?: number })));
   app.get("/api/source-coverage", async (c) => c.json(await (await scopedServices(c)).query.sourceCoverage()));
   app.get("/api/tag-coverage", async (c) => c.json(await (await scopedServices(c)).query.tagCoverage()));
   app.get("/api/ready", async (c) => c.json(await (await scopedServices(c)).query.list({ status: "ready" })));
@@ -246,6 +296,25 @@ function parseOptionalPriority(value: string | undefined): Priority | undefined 
     return parsed;
   }
   return undefined;
+}
+
+function parseOptionalInteger(value: string | undefined): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    throw new UnblockError("validation", `Invalid integer: ${value}`);
+  }
+  return parsed;
+}
+
+function parseRequiredInteger(value: string | undefined, name: string): number {
+  const parsed = parseOptionalInteger(value);
+  if (parsed === undefined) {
+    throw new UnblockError("validation", `${name} is required.`);
+  }
+  return parsed;
 }
 
 function defined<T extends Record<string, unknown>>(value: T): T {

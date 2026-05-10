@@ -3,11 +3,14 @@ import type {
   Dependency,
   Migration,
   Project,
+  QueueFeed,
+  SavedView,
   Tag,
   Task,
   TaskTag,
   Track,
-  TrackAssignment
+  TrackAssignment,
+  Instruction
 } from "./types.js";
 
 export interface ProjectRepository {
@@ -62,6 +65,27 @@ export interface ActivityRepository {
   append(activity: Activity): Promise<void>;
 }
 
+export interface InstructionRepository {
+  list(projectId?: string): Promise<Instruction[]>;
+  get(projectId: string, id: string): Promise<Instruction | null>;
+  create(instruction: Instruction): Promise<void>;
+  update(instruction: Instruction): Promise<void>;
+}
+
+export interface SavedViewRepository {
+  list(projectId?: string): Promise<SavedView[]>;
+  get(projectId: string, id: string): Promise<SavedView | null>;
+  create(view: SavedView): Promise<void>;
+  update(view: SavedView): Promise<void>;
+}
+
+export interface QueueFeedRepository {
+  list(projectId?: string): Promise<QueueFeed[]>;
+  get(projectId: string, id: string): Promise<QueueFeed | null>;
+  create(feed: QueueFeed): Promise<void>;
+  update(feed: QueueFeed): Promise<void>;
+}
+
 export interface MigrationRepository {
   list(): Promise<Migration[]>;
   markApplied(migration: Migration): Promise<void>;
@@ -73,6 +97,9 @@ export interface RepositorySet {
   dependencies: DependencyRepository;
   tags: TagRepository;
   tracks: TrackRepository;
+  instructions: InstructionRepository;
+  views: SavedViewRepository;
+  feeds: QueueFeedRepository;
   activity: ActivityRepository;
   migrations: MigrationRepository;
 }

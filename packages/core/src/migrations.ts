@@ -344,6 +344,59 @@ export const sqliteMigrations: StoreMigration[] = [
       create index if not exists idx_activity_project_created on activity(project_id, created_at);
       create index if not exists idx_activity_subject on activity(project_id, subject_type, subject_id);
     `
+  },
+  {
+    id: "0004",
+    name: "add instructions",
+    sql: `
+      create table if not exists instructions (
+        project_id text not null references projects(id) on delete restrict,
+        id text not null,
+        name text not null,
+        query text not null,
+        body text not null,
+        enabled integer not null default 1 check (enabled in (0, 1)),
+        created_at text not null,
+        updated_at text not null,
+        archived_at text null,
+        primary key (project_id, id),
+        unique (project_id, name)
+      );
+
+      create index if not exists idx_instructions_project_enabled on instructions(project_id, enabled, archived_at);
+    `
+  },
+  {
+    id: "0005",
+    name: "add saved views and queue feeds",
+    sql: `
+      create table if not exists saved_views (
+        project_id text not null references projects(id) on delete restrict,
+        id text not null,
+        name text not null,
+        query text not null,
+        created_at text not null,
+        updated_at text not null,
+        archived_at text null,
+        primary key (project_id, id),
+        unique (project_id, name)
+      );
+
+      create table if not exists queue_feeds (
+        project_id text not null references projects(id) on delete restrict,
+        id text not null,
+        name text not null,
+        query text not null,
+        created_at text not null,
+        updated_at text not null,
+        archived_at text null,
+        primary key (project_id, id),
+        unique (project_id, name)
+      );
+
+      create index if not exists idx_saved_views_project_archived on saved_views(project_id, archived_at);
+      create index if not exists idx_queue_feeds_project_archived on queue_feeds(project_id, archived_at);
+    `
   }
 ];
 

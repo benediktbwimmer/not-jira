@@ -4,12 +4,15 @@ import type {
   DependencyRepository,
   MigrationRepository,
   ProjectRepository,
+  QueueFeedRepository,
   RepositorySet,
+  InstructionRepository,
+  SavedViewRepository,
   TagRepository,
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Migration, Project, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Dependency, Instruction, Migration, Project, QueueFeed, SavedView, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
 import { DEFAULT_PROJECT_ID, nowIso } from "./types.js";
 
 interface MemoryState {
@@ -19,6 +22,9 @@ interface MemoryState {
   tags: Map<string, Tag>;
   taskTags: Map<string, TaskTag>;
   tracks: Map<string, Track>;
+  instructions: Map<string, Instruction>;
+  views: Map<string, SavedView>;
+  feeds: Map<string, QueueFeed>;
   assignments: Map<string, TrackAssignment>;
   activity: Activity[];
   migrations: Map<string, Migration>;
@@ -31,6 +37,9 @@ export class MemoryStore implements AppStore {
   readonly dependencies: DependencyRepository;
   readonly tags: TagRepository;
   readonly tracks: TrackRepository;
+  readonly instructions: InstructionRepository;
+  readonly views: SavedViewRepository;
+  readonly feeds: QueueFeedRepository;
   readonly activity: ActivityRepository;
   readonly migrations: MigrationRepository;
 
@@ -40,6 +49,9 @@ export class MemoryStore implements AppStore {
     tags: Tag[];
     taskTags: TaskTag[];
     tracks: Track[];
+    instructions: Instruction[];
+    views: SavedView[];
+    feeds: QueueFeed[];
     projects: Project[];
     assignments: TrackAssignment[];
     activity: Activity[];
@@ -64,6 +76,9 @@ export class MemoryStore implements AppStore {
       tags: new Map((seed?.tags ?? []).map((tag) => [scopedKey(tag.projectId, tag.id), tag])),
       taskTags: new Map((seed?.taskTags ?? []).map((taskTag) => [taskTagKey(taskTag.projectId, taskTag.taskId, taskTag.tagId), taskTag])),
       tracks: new Map((seed?.tracks ?? []).map((track) => [scopedKey(track.projectId, track.id), track])),
+      instructions: new Map((seed?.instructions ?? []).map((instruction) => [scopedKey(instruction.projectId, instruction.id), instruction])),
+      views: new Map((seed?.views ?? []).map((view) => [scopedKey(view.projectId, view.id), view])),
+      feeds: new Map((seed?.feeds ?? []).map((feed) => [scopedKey(feed.projectId, feed.id), feed])),
       assignments: new Map((seed?.assignments ?? []).map((assignment) => [assignmentKey(assignment.projectId, assignment.trackId, assignment.taskId), assignment])),
       activity: [...(seed?.activity ?? [])],
       migrations: new Map((seed?.migrations ?? []).map((migration) => [migration.id, migration]))
@@ -73,6 +88,9 @@ export class MemoryStore implements AppStore {
     this.dependencies = new MemoryDependencyRepository(this.state);
     this.tags = new MemoryTagRepository(this.state);
     this.tracks = new MemoryTrackRepository(this.state);
+    this.instructions = new MemoryInstructionRepository(this.state);
+    this.views = new MemorySavedViewRepository(this.state);
+    this.feeds = new MemoryQueueFeedRepository(this.state);
     this.activity = new MemoryActivityRepository(this.state);
     this.migrations = new MemoryMigrationRepository(this.state);
   }
@@ -284,6 +302,69 @@ class MemoryActivityRepository implements ActivityRepository {
   }
 }
 
+class MemoryInstructionRepository implements InstructionRepository {
+  constructor(private readonly state: MemoryState) {}
+
+  async list(projectId?: string): Promise<Instruction[]> {
+    return [...this.state.instructions.values()].filter((instruction) => !projectId || instruction.projectId === projectId).map(cloneInstruction).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  async get(projectId: string, id: string): Promise<Instruction | null> {
+    const instruction = this.state.instructions.get(scopedKey(projectId, id));
+    return instruction ? cloneInstruction(instruction) : null;
+  }
+
+  async create(instruction: Instruction): Promise<void> {
+    this.state.instructions.set(scopedKey(instruction.projectId, instruction.id), cloneInstruction(instruction));
+  }
+
+  async update(instruction: Instruction): Promise<void> {
+    this.state.instructions.set(scopedKey(instruction.projectId, instruction.id), cloneInstruction(instruction));
+  }
+}
+
+class MemorySavedViewRepository implements SavedViewRepository {
+  constructor(private readonly state: MemoryState) {}
+
+  async list(projectId?: string): Promise<SavedView[]> {
+    return [...this.state.views.values()].filter((view) => !projectId || view.projectId === projectId).map(cloneSavedView).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  async get(projectId: string, id: string): Promise<SavedView | null> {
+    const view = this.state.views.get(scopedKey(projectId, id));
+    return view ? cloneSavedView(view) : null;
+  }
+
+  async create(view: SavedView): Promise<void> {
+    this.state.views.set(scopedKey(view.projectId, view.id), cloneSavedView(view));
+  }
+
+  async update(view: SavedView): Promise<void> {
+    this.state.views.set(scopedKey(view.projectId, view.id), cloneSavedView(view));
+  }
+}
+
+class MemoryQueueFeedRepository implements QueueFeedRepository {
+  constructor(private readonly state: MemoryState) {}
+
+  async list(projectId?: string): Promise<QueueFeed[]> {
+    return [...this.state.feeds.values()].filter((feed) => !projectId || feed.projectId === projectId).map(cloneQueueFeed).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  }
+
+  async get(projectId: string, id: string): Promise<QueueFeed | null> {
+    const feed = this.state.feeds.get(scopedKey(projectId, id));
+    return feed ? cloneQueueFeed(feed) : null;
+  }
+
+  async create(feed: QueueFeed): Promise<void> {
+    this.state.feeds.set(scopedKey(feed.projectId, feed.id), cloneQueueFeed(feed));
+  }
+
+  async update(feed: QueueFeed): Promise<void> {
+    this.state.feeds.set(scopedKey(feed.projectId, feed.id), cloneQueueFeed(feed));
+  }
+}
+
 class MemoryMigrationRepository implements MigrationRepository {
   constructor(private readonly state: MemoryState) {}
 
@@ -348,6 +429,18 @@ function cloneActivity(activity: Activity): Activity {
   return { ...activity, data: { ...activity.data } };
 }
 
+function cloneInstruction(instruction: Instruction): Instruction {
+  return { ...instruction };
+}
+
+function cloneSavedView(view: SavedView): SavedView {
+  return { ...view };
+}
+
+function cloneQueueFeed(feed: QueueFeed): QueueFeed {
+  return { ...feed };
+}
+
 function cloneMigration(migration: Migration): Migration {
   return { ...migration };
 }
@@ -360,6 +453,9 @@ function cloneState(state: MemoryState): MemoryState {
     tags: new Map([...state.tags].map(([key, value]) => [key, cloneTag(value)])),
     taskTags: new Map([...state.taskTags].map(([key, value]) => [key, cloneTaskTag(value)])),
     tracks: new Map([...state.tracks].map(([key, value]) => [key, cloneTrack(value)])),
+    instructions: new Map([...state.instructions].map(([key, value]) => [key, cloneInstruction(value)])),
+    views: new Map([...state.views].map(([key, value]) => [key, cloneSavedView(value)])),
+    feeds: new Map([...state.feeds].map(([key, value]) => [key, cloneQueueFeed(value)])),
     assignments: new Map([...state.assignments].map(([key, value]) => [key, cloneAssignment(value)])),
     activity: state.activity.map(cloneActivity),
     migrations: new Map([...state.migrations].map(([key, value]) => [key, cloneMigration(value)]))
@@ -373,6 +469,9 @@ function restoreState(target: MemoryState, source: MemoryState): void {
   target.tags = source.tags;
   target.taskTags = source.taskTags;
   target.tracks = source.tracks;
+  target.instructions = source.instructions;
+  target.views = source.views;
+  target.feeds = source.feeds;
   target.assignments = source.assignments;
   target.activity = source.activity;
   target.migrations = source.migrations;

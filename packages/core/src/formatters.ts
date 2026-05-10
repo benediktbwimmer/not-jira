@@ -61,6 +61,15 @@ export function formatExplain(explanation: DependencyExplanation): string {
   }
 
   lines.push("", `Assignable: ${explanation.assignable ? "yes" : "no"}`, `Reason: ${explanation.reason}`);
+  if (explanation.instructions.length > 0) {
+    lines.push("", "Instructions:");
+    for (const match of explanation.instructions) {
+      lines.push(`- ${match.instruction.name} (${match.reasons.join(", ") || "matched"})`);
+      if (match.instruction.body.trim()) {
+        lines.push(indent(match.instruction.body.trim(), "  "));
+      }
+    }
+  }
   return lines.join("\n");
 }
 
@@ -82,6 +91,10 @@ function table(headers: string[], rows: string[][]): string {
   const widths = headers.map((header, index) => Math.max(header.length, ...rows.map((row) => (row[index] ?? "").length)));
   const renderRow = (row: string[]) => row.map((cell, index) => cell.padEnd(widths[index] ?? 0)).join("  ").trimEnd();
   return [renderRow(headers), renderRow(widths.map((width) => "-".repeat(width))), ...rows.map(renderRow)].join("\n");
+}
+
+function indent(value: string, prefix: string): string {
+  return value.split("\n").map((line) => `${prefix}${line}`).join("\n");
 }
 
 function formatRollup(task: TaskView): string {

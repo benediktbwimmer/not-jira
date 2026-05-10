@@ -2,13 +2,16 @@ import type { AppStore } from "./store.js";
 import { priorityLabel, type JsonExport, type TaskView } from "./types.js";
 
 export async function exportStoreJson(store: AppStore, includeActivity = false, projectId?: string): Promise<JsonExport> {
-  const [tasks, dependencies, tags, taskTags, tracks, assignments, activity] = await Promise.all([
+  const [tasks, dependencies, tags, taskTags, tracks, assignments, instructions, views, feeds, activity] = await Promise.all([
     store.tasks.list(projectId),
     store.dependencies.list(projectId),
     store.tags.list(projectId),
     store.tags.listTaskTags(projectId),
     store.tracks.list(projectId),
     store.tracks.listAssignments(projectId),
+    store.instructions.list(projectId),
+    store.views.list(projectId),
+    store.feeds.list(projectId),
     includeActivity ? store.activity.list(projectId ?? null, Number.MAX_SAFE_INTEGER) : Promise.resolve(undefined)
   ]);
   const result: JsonExport = {
@@ -17,7 +20,10 @@ export async function exportStoreJson(store: AppStore, includeActivity = false, 
     tags,
     taskTags,
     tracks,
-    assignments
+    assignments,
+    instructions,
+    views,
+    feeds
   };
   if (activity) {
     result.activity = activity;
@@ -46,6 +52,9 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
   lines.push(`- Dependencies: ${data.dependencies.length}`);
   lines.push(`- Tags: ${data.tags.length}`);
   lines.push(`- Actor queues: ${data.tracks.length}`);
+  lines.push(`- Instructions: ${data.instructions?.length ?? 0}`);
+  lines.push(`- Saved views: ${data.views?.length ?? 0}`);
+  lines.push(`- Queue feeds: ${data.feeds?.length ?? 0}`);
   lines.push("");
 
   lines.push("## Tasks", "");
@@ -99,6 +108,21 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
       lines.push(`- \`${dependency.taskId}\` ${task ? escapeInline(task.title) : ""} depends on \`${dependency.dependsOnTaskId}\` ${dependsOn ? escapeInline(dependsOn.title) : ""}`.trim());
     }
     lines.push("");
+  }
+
+  lines.push("## Instructions", "");
+  if (!data.instructions?.length) {
+    lines.push("No instructions.", "");
+  } else {
+    for (const instruction of data.instructions) {
+      lines.push(`### ${escapeInline(instruction.name)}`, "");
+      lines.push(`- ID: ${instruction.id}`);
+      lines.push(`- Enabled: ${instruction.enabled ? "yes" : "no"}`);
+      lines.push(`- Archived: ${instruction.archivedAt ?? "no"}`);
+      lines.push(`- Matcher: \`${escapeInline(instruction.query)}\``, "");
+      lines.push(formatDescription(instruction.body));
+      lines.push("");
+    }
   }
 
   lines.push("## Actor Queues", "");
