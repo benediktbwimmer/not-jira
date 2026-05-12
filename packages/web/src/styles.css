@@ -2480,6 +2480,7 @@ kbd {
   .top-matcher,
   .activity-matcher,
   .timeline-range-tabs,
+  .timeline-view-tabs,
   .status-tabs {
     background: #202630;
     border-color: #3a4555;
@@ -2502,7 +2503,8 @@ kbd {
     box-shadow: none;
   }
 
-  .timeline-range-tabs button.active {
+  .timeline-range-tabs button.active,
+  .timeline-view-tabs button.active {
     background: #303846;
     color: #edf2f7;
     box-shadow: none;
@@ -2597,20 +2599,21 @@ kbd {
     color: #e5fff4;
   }
 
-  .timeline-session-bar.finished {
+  .timeline-session.finished .timeline-session-bar {
     background: linear-gradient(180deg, #1d2c47, #17243b);
     border-color: #4f73b7;
     color: #e7f0ff;
   }
 
-  .timeline-session-bar.released {
+  .timeline-session.released .timeline-session-bar {
     background: linear-gradient(180deg, #443316, #36270f);
     border-color: #a56f15;
     color: #fff1cf;
   }
 
-  .timeline-session-bar.archived,
-  .timeline-marker {
+  .timeline-session.archived .timeline-session-bar,
+  .timeline-marker,
+  .timeline-annotation {
     background: #202630;
     border-color: #465368;
     color: #aeb8c8;
