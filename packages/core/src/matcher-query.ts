@@ -28,7 +28,7 @@ const PHRASE_FIELDS = ["id prefix", "source doc", "source section"] as const;
 const FIELD_NAMES = [...SIMPLE_FIELDS, ...TIME_FIELDS, ...PHRASE_FIELDS] as const;
 const GRAPH_VERBS = ["depends on", "unblocks"] as const;
 const GRAPH_EDGE_KINDS = ["explicit dependencies", "implicit hierarchy edges"] as const;
-const INSTRUCTION_QUERY_EXAMPLES = [
+const MATCHER_QUERY_EXAMPLES = [
   "tag = frontend",
   "tag in (frontend, backend)",
   "assigned = local:codex-b",
@@ -48,7 +48,7 @@ type CompareOp = typeof COMPARE_OPERATORS[number];
 type FieldOperator = typeof FIELD_OPERATORS[number];
 type GraphVerb = typeof GRAPH_VERBS[number];
 
-export interface InstructionQueryGrammar {
+export interface MatcherQueryGrammar {
   fields: FieldName[];
   fieldOperators: FieldOperator[];
   comparisonOperators: CompareOp[];
@@ -116,12 +116,12 @@ interface EvalResult {
   reasons: string[];
 }
 
-export interface InstructionQueryMatch {
+export interface MatcherQueryMatch {
   task: TaskView;
   reasons: string[];
 }
 
-export function instructionQueryGrammar(): InstructionQueryGrammar {
+export function matcherQueryGrammar(): MatcherQueryGrammar {
   return {
     fields: [...FIELD_NAMES],
     fieldOperators: [...FIELD_OPERATORS],
@@ -194,7 +194,7 @@ export function instructionQueryGrammar(): InstructionQueryGrammar {
         description: "Match tasks below TASK in the parent-child hierarchy."
       }
     ],
-    examples: [...INSTRUCTION_QUERY_EXAMPLES],
+    examples: [...MATCHER_QUERY_EXAMPLES],
     notes: [
       "Boolean precedence is: not, then and, then or.",
       "Field comparisons are case-insensitive except numeric priority comparisons.",
@@ -212,13 +212,13 @@ export function instructionQueryGrammar(): InstructionQueryGrammar {
       "Add depth = 1, depth <= 2, or another depth comparison to bound graph traversal.",
       "Count predicates omit a task reference, for example depends on > 3 or unblocks >= 5.",
       "The graph includes explicit task dependencies plus implicit hierarchy edges: parents depend on descendants, and children unblock ancestors.",
-      "Archived tasks are ignored by instruction matching and graph traversal."
+      "Archived tasks are ignored by matcher queries and graph traversal."
     ]
   };
 }
 
-export function formatInstructionQueryGrammar(): string {
-  const grammar = instructionQueryGrammar();
+export function formatMatcherQueryGrammar(): string {
+  const grammar = matcherQueryGrammar();
   return [
     "Matcher reference:",
     "",
@@ -246,21 +246,21 @@ export function formatInstructionQueryGrammar(): string {
   ].join("\n");
 }
 
-export function validateInstructionQuery(query: string): string[] {
+export function validateMatcherQuery(query: string): string[] {
   try {
-    parseInstructionQuery(query);
+    parseMatcherQuery(query);
     return [];
   } catch (error) {
     return [error instanceof Error ? error.message : String(error)];
   }
 }
 
-export function matchInstructionQuery(query: string, tasks: TaskView[], dependencies: Dependency[]): InstructionQueryMatch[] {
-  const ast = parseInstructionQuery(query);
+export function matchMatcherQuery(query: string, tasks: TaskView[], dependencies: Dependency[]): MatcherQueryMatch[] {
+  const ast = parseMatcherQuery(query);
   const graph = buildEffectiveGraph(tasks, dependencies);
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const now = new Date();
-  const matches: InstructionQueryMatch[] = [];
+  const matches: MatcherQueryMatch[] = [];
   for (const task of tasks) {
     if (task.archivedAt) {
       continue;
@@ -273,7 +273,7 @@ export function matchInstructionQuery(query: string, tasks: TaskView[], dependen
   return matches;
 }
 
-export function parseInstructionQuery(query: string): QueryNode {
+export function parseMatcherQuery(query: string): QueryNode {
   const parser = new Parser(tokenize(query));
   const ast = parser.parseExpression();
   parser.expect("eof");
@@ -518,7 +518,7 @@ class Parser {
   }
 
   private fail(message: string): never {
-    validation(`Invalid instruction query: ${message}`, { offset: this.peek().offset });
+    validation(`Invalid matcher query: ${message}`, { offset: this.peek().offset });
   }
 }
 
@@ -831,7 +831,7 @@ function tokenize(input: string): Token[] {
         value += input[index] as string;
         index += 1;
       }
-      if (input[index] !== quote) validation("Unterminated quoted string in instruction query.");
+      if (input[index] !== quote) validation("Unterminated quoted string in matcher query.");
       index += 1;
       tokens.push({ kind: "string", value, offset: start });
       continue;

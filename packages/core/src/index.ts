@@ -10,4 +10,4 @@ export * from "./markdown-import.js";
 export * from "./exporters.js";
 export * from "./formatters.js";
 export * from "./config.js";
-export * from "./instruction-query.js";
+export * from "./matcher-query.js";

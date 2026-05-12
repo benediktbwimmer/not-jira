@@ -126,6 +126,10 @@ export interface Activity {
   createdAt: string;
 }
 
+export interface ActivityView extends Activity {
+  task: TaskView | null;
+}
+
 export interface Instruction {
   projectId: string;
   id: string;
@@ -281,14 +285,18 @@ export interface EditCommentInput {
   body?: string;
 }
 
-export interface InstructionPreview {
+export interface ReleaseTaskInput {
+  reason: string;
+}
+
+export interface MatcherPreview {
   ok: boolean;
   query: string;
   errors: string[];
   matches: InstructionMatch[];
 }
 
-export interface InstructionFieldValueSuggestion {
+export interface MatcherFieldValueSuggestion {
   field: string;
   value: string;
   label: string;
@@ -312,6 +320,11 @@ export interface TaskListFilters {
   includeFinished?: boolean;
   includeArchived?: boolean;
   sort?: TaskSort;
+}
+
+export interface ActivityListOptions {
+  limit?: number;
+  where?: string;
 }
 
 export interface SourceSectionCoverage {

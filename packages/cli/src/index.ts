@@ -14,7 +14,7 @@ import {
   ensureUnblockConfig,
   formatActivity,
   formatExplain,
-  formatInstructionQueryGrammar,
+  formatMatcherQueryGrammar,
   formatTaskMarkdown,
   formatTaskTable,
   MigrationService,
@@ -44,6 +44,9 @@ interface GlobalOptions {
   actor?: string;
 }
 
+const DEFAULT_API_PORT = 39217;
+const DEFAULT_WEB_PORT = 39218;
+
 const program = new Command();
 const TASK_MUTATION_HELP = `
 Required context:
@@ -68,8 +71,8 @@ program
 
 program.command("serve")
   .description("Start the API and web dev servers")
-  .option("--api-port <port>", "API server port", parseInteger, 3000)
-  .option("--web-port <port>", "web server port", parseInteger, 5173)
+  .option("--api-port <port>", "API server port", parseInteger, DEFAULT_API_PORT)
+  .option("--web-port <port>", "web server port", parseInteger, DEFAULT_WEB_PORT)
   .option("--host <host>", "web server host", "0.0.0.0")
   .action(async (options: { apiPort: number; webPort: number; host: string }) => {
     const root = findWorkspaceRoot();
@@ -602,6 +605,14 @@ task.command("restore-comment")
   .argument("<commentId>")
   .action(async (commentId) => withMutationServices(async ({ services }) => print(await services.comments.restore(commentId), format())));
 
+task.command("release")
+  .argument("<id>")
+  .description("Release a started task back to ready or blocked work")
+  .requiredOption("--reason <text>", "required release reason; stored as an automatic task comment")
+  .action(async (id, options: { reason: string }) => withMutationServices(async ({ services }) => {
+    print(await services.tasks.release(id, { reason: options.reason }), format());
+  }));
+
 for (const lifecycleCommand of [
   ["start", "started"],
   ["finish", "finished"],
@@ -811,7 +822,7 @@ const instruction = program.command("instruction")
 Project scope:
   Pass --project <id> on every instruction command. Mutations also require --actor <name>.
 
-${formatInstructionQueryGrammar()}`);
+${formatMatcherQueryGrammar()}`);
 
 instruction.command("add")
   .requiredOption("--name <name>", "instruction name")
@@ -880,7 +891,7 @@ program.command("query")
 Project scope:
   Pass --project <id>. Project context is never sticky.
 
-${formatInstructionQueryGrammar()}`)
+${formatMatcherQueryGrammar()}`)
   .action(async (options) => withServices(async ({ services }) => {
     const filters = defined({
       includeFinished: options.includeFinished,
@@ -889,6 +900,19 @@ ${formatInstructionQueryGrammar()}`)
     }) as Omit<TaskListFilters, "where">;
     const tasks = await services.query.match(options.where, options.limit, filters);
     printTasks(tasks);
+  }));
+
+program.command("query-suggest")
+  .description("List matcher field value suggestions")
+  .argument("<field>", "matcher field")
+  .requiredOption("--limit <n>", "maximum suggestions to return", parseInteger)
+  .option("--prefix <text>", "only values matching this prefix")
+  .action(async (field, options: { limit: number; prefix?: string }) => withServices(async ({ services }) => {
+    const input: { prefix?: string; limit: number } = { limit: options.limit };
+    if (options.prefix !== undefined) {
+      input.prefix = options.prefix;
+    }
+    print(await services.query.suggest(field, input), format());
   }));
 
 program.command("context")
@@ -905,7 +929,7 @@ const view = program.command("view")
 Project scope:
   Pass --project <id> on every saved view command. Mutations also require --actor <name>.
 
-${formatInstructionQueryGrammar()}`);
+${formatMatcherQueryGrammar()}`);
 
 view.command("add")
   .requiredOption("--name <name>", "saved view name")
@@ -951,7 +975,7 @@ Project scope:
 
 Feeds are saved matcher queries for ready task candidates.
 
-${formatInstructionQueryGrammar()}`);
+${formatMatcherQueryGrammar()}`);
 
 feed.command("add")
   .requiredOption("--name <name>", "queue feed name")
@@ -1044,8 +1068,9 @@ program.command("activity")
 Project scope:
   Pass --project <id>. Project context is never sticky.`)
   .option("--limit <n>", "limit", parseInteger)
+  .option("--where <query>", "only include activity attached to tasks matched by this matcher query")
   .action(async (options) => withServices(async ({ services }) => {
-    const activity = await services.activity.list(options.limit ?? 100);
+    const activity = await services.activity.list(defined({ limit: options.limit ?? 100, where: options.where }));
     if (format() === "table") {
       console.log(formatActivity(activity));
     } else {

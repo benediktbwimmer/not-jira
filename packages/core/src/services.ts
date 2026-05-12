@@ -40,14 +40,17 @@ import {
   type ImportIssue,
   type Instruction,
   type InstructionMatch,
-  type InstructionPreview,
+  type MatcherPreview,
   type ImportResult,
   type JsonExport,
   type JsonImportResult,
-  type InstructionFieldValueSuggestion,
+  type MatcherFieldValueSuggestion,
   type Priority,
   type Project,
   type QueueFeed,
+  type ActivityListOptions,
+  type ActivityView,
+  type ReleaseTaskInput,
   type RollupStatus,
   type SavedView,
   type SourceSectionCoverage,
@@ -64,7 +67,7 @@ import {
 import { conflict, notFound, validation } from "./errors.js";
 import { parseMarkdownTracker } from "./markdown-import.js";
 import { exportMarkdown, exportStoreJson } from "./exporters.js";
-import { instructionQueryGrammar, matchInstructionQuery, validateInstructionQuery } from "./instruction-query.js";
+import { matcherQueryGrammar, matchMatcherQuery, validateMatcherQuery } from "./matcher-query.js";
 
 export interface Services {
   projects: ProjectService;
@@ -176,8 +179,28 @@ export class ActivityService {
     return { machine, actor };
   }
 
-  async list(limit = 100): Promise<Activity[]> {
-    return this.store.activity.list(this.projectId, limit);
+  async list(options: number | ActivityListOptions = 100): Promise<ActivityView[]> {
+    const normalized = typeof options === "number" ? { limit: options } : options;
+    const limit = normalizeQueryLimit(normalized.limit ?? 100);
+    const rawLimit = normalized.where?.trim() ? Math.max(limit * 10, 500) : limit;
+    let activity = await this.store.activity.list(this.projectId, rawLimit);
+    const query = new QueryService(this.store, this.projectId);
+    const tasks = await query.list({ includeArchived: true, includeFinished: true });
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+
+    if (normalized.where?.trim()) {
+      const dependencies = await this.store.dependencies.list(this.projectId);
+      const matchingTaskIds = new Set(matchMatcherQuery(normalized.where, tasks, dependencies).map((match) => match.task.id));
+      activity = activity.filter((item) => {
+        const taskId = activityTaskId(item);
+        return Boolean(taskId && matchingTaskIds.has(taskId));
+      }).slice(0, limit);
+    }
+
+    return activity.map((item) => {
+      const taskId = activityTaskId(item);
+      return { ...item, task: taskId ? taskById.get(taskId) ?? null : null };
+    });
   }
 }
 
@@ -372,6 +395,46 @@ export class TaskService {
 
   async reopen(id: string): Promise<Task> {
     return this.edit(id, { lifecycle: "open" });
+  }
+
+  async release(id: string, input: ReleaseTaskInput): Promise<Task> {
+    const taskId = normalizeId(id);
+    const reason = normalizeCommentBody(input.reason);
+    const provenance = this.activity.provenance();
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
+      if (task.archivedAt) {
+        validation("Archived tasks cannot be released.", { taskId });
+      }
+      if (task.lifecycle !== "started") {
+        validation("Only started tasks can be released.", { taskId, lifecycle: task.lifecycle });
+      }
+      const comment: Comment = {
+        projectId: this.projectId,
+        id: randomUUID(),
+        taskId,
+        machine: provenance.machine,
+        actor: provenance.actor,
+        body: `Released: ${reason}`,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null
+      };
+      const updated: Task = {
+        ...task,
+        lifecycle: "open",
+        startedAt: null,
+        finishedAt: null,
+        updatedAt: now,
+        version: task.version + 1
+      };
+      await repos.tasks.update(updated);
+      await repos.comments.create(comment);
+      await repos.activity.append(this.activity.make(this.projectId, "comment.created", "comment", comment.id, `Commented on ${taskId}`, { taskId }));
+      await repos.activity.append(this.activity.make(this.projectId, "task.released", "task", taskId, `Released ${taskId}`, { from: "started", to: "open", reason, commentId: comment.id, taskId }));
+      return updated;
+    });
   }
 
   async archive(id: string): Promise<Task> {
@@ -767,9 +830,9 @@ export class InstructionService {
   constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
 
   async add(input: AddInstructionInput): Promise<Instruction> {
-    const errors = validateInstructionQuery(input.query);
+    const errors = validateMatcherQuery(input.query);
     if (errors.length > 0) {
-      validation("Instruction query is invalid.", { errors });
+      validation("Instruction matcher is invalid.", { errors });
     }
     const now = nowIso();
     const instruction: Instruction = {
@@ -803,9 +866,9 @@ export class InstructionService {
   async edit(idInput: string, input: EditInstructionInput): Promise<Instruction> {
     const id = normalizeId(idInput);
     if (input.query !== undefined) {
-      const errors = validateInstructionQuery(input.query);
+      const errors = validateMatcherQuery(input.query);
       if (errors.length > 0) {
-        validation("Instruction query is invalid.", { errors });
+        validation("Instruction matcher is invalid.", { errors });
       }
     }
     const now = nowIso();
@@ -865,8 +928,8 @@ export class InstructionService {
     return await this.store.instructions.get(this.projectId, id) ?? notFound("instruction", id);
   }
 
-  async preview(query: string): Promise<InstructionPreview> {
-    return this.query.previewInstructionQuery(query);
+  async preview(query: string): Promise<MatcherPreview> {
+    return this.query.previewMatcherQuery(query);
   }
 
   async matchesForTask(taskIdInput: string): Promise<InstructionMatch[]> {
@@ -875,12 +938,195 @@ export class InstructionService {
     return matches.filter((match) => match.task.id === taskId);
   }
 
-  async suggest(fieldInput: string, input: { prefix?: string; limit: number }): Promise<InstructionFieldValueSuggestion[]> {
-    const field = normalizeInstructionSuggestionField(fieldInput);
+  async suggest(fieldInput: string, input: { prefix?: string; limit: number }): Promise<MatcherFieldValueSuggestion[]> {
+    return this.query.suggest(fieldInput, input);
+  }
+}
+
+export class SavedViewService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
+
+  async add(input: AddSavedViewInput): Promise<SavedView> {
+    const errors = validateMatcherQuery(input.query);
+    if (errors.length > 0) {
+      validation("Saved view matcher is invalid.", { errors });
+    }
+    const now = nowIso();
+    const view: SavedView = {
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+      name: input.name.trim(),
+      query: input.query.trim(),
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    if (!view.name) validation("Saved view name is required.");
+    await this.store.transaction(async (repos) => {
+      if (await repos.views.get(this.projectId, view.id)) conflict(`Saved view already exists: ${view.id}`);
+      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.name === view.name);
+      if (duplicate) conflict(`Saved view name already exists: ${view.name}`);
+      await repos.views.create(view);
+      await repos.activity.append(this.activity.make(this.projectId, "view.created", "view", view.id, `Created saved view ${view.name}`, { query: view.query }));
+    });
+    return view;
+  }
+
+  async edit(idInput: string, input: EditSavedViewInput): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    if (input.query !== undefined) {
+      const errors = validateMatcherQuery(input.query);
+      if (errors.length > 0) validation("Saved view matcher is invalid.", { errors });
+    }
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next: SavedView = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
+      if (!next.name) validation("Saved view name is required.");
+      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
+      if (duplicate) conflict(`Saved view name already exists: ${next.name}`);
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.updated", "view", next.id, `Updated saved view ${next.name}`));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.archived", "view", id, `Archived saved view ${existing.name}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.views.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "view.restored", "view", id, `Restored saved view ${existing.name}`));
+      return next;
+    });
+  }
+
+  async list(includeArchived = false): Promise<SavedView[]> {
+    return (await this.store.views.list(this.projectId)).filter((view) => includeArchived || !view.archivedAt);
+  }
+
+  async get(idInput: string): Promise<SavedView> {
+    const id = normalizeId(idInput);
+    return await this.store.views.get(this.projectId, id) ?? notFound("saved view", id);
+  }
+
+  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
+    const view = await this.get(idInput);
+    return limit === undefined ? this.query.list({ where: view.query }) : (await this.query.list({ where: view.query })).slice(0, limit);
+  }
+}
+
+export class QueueFeedService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
+
+  async add(input: AddQueueFeedInput): Promise<QueueFeed> {
+    const errors = validateMatcherQuery(input.query);
+    if (errors.length > 0) {
+      validation("Queue feed matcher is invalid.", { errors });
+    }
+    const now = nowIso();
+    const feed: QueueFeed = {
+      projectId: this.projectId,
+      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+      name: input.name.trim(),
+      query: input.query.trim(),
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    if (!feed.name) validation("Queue feed name is required.");
+    await this.store.transaction(async (repos) => {
+      if (await repos.feeds.get(this.projectId, feed.id)) conflict(`Queue feed already exists: ${feed.id}`);
+      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.name === feed.name);
+      if (duplicate) conflict(`Queue feed name already exists: ${feed.name}`);
+      await repos.feeds.create(feed);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.created", "feed", feed.id, `Created queue feed ${feed.name}`, { query: feed.query }));
+    });
+    return feed;
+  }
+
+  async edit(idInput: string, input: EditQueueFeedInput): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    if (input.query !== undefined) {
+      const errors = validateMatcherQuery(input.query);
+      if (errors.length > 0) validation("Queue feed matcher is invalid.", { errors });
+    }
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next: QueueFeed = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
+      if (!next.name) validation("Queue feed name is required.");
+      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
+      if (duplicate) conflict(`Queue feed name already exists: ${next.name}`);
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.updated", "feed", next.id, `Updated queue feed ${next.name}`));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.archived", "feed", id, `Archived queue feed ${existing.name}`));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.feeds.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "feed.restored", "feed", id, `Restored queue feed ${existing.name}`));
+      return next;
+    });
+  }
+
+  async list(includeArchived = false): Promise<QueueFeed[]> {
+    return (await this.store.feeds.list(this.projectId)).filter((feed) => includeArchived || !feed.archivedAt);
+  }
+
+  async get(idInput: string): Promise<QueueFeed> {
+    const id = normalizeId(idInput);
+    return await this.store.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
+  }
+
+  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
+    const feed = await this.get(idInput);
+    const tasks = await this.query.list({ where: feed.query, status: "ready" });
+    return limit === undefined ? tasks : tasks.slice(0, limit);
+  }
+}
+
+export class QueryService {
+  constructor(private readonly store: AppStore, private readonly projectId: string) {}
+
+  async suggest(fieldInput: string, input: { prefix?: string; limit: number }): Promise<MatcherFieldValueSuggestion[]> {
+    const field = normalizeMatcherSuggestionField(fieldInput);
     const limit = normalizeSuggestionLimit(input.limit);
     const prefix = input.prefix?.trim().toLowerCase() ?? "";
-    const tasks = await this.query.list({ includeFinished: true });
-    const counts = new Map<string, InstructionFieldValueSuggestion>();
+    const tasks = await this.list({ includeFinished: true });
+    const counts = new Map<string, MatcherFieldValueSuggestion>();
     const ranks = new Map<string, number>();
     const taskSuggestionRank = new Map([...tasks].sort((a, b) => a.hierarchyDepth - b.hierarchyDepth || a.id.localeCompare(b.id)).map((task, index) => [task.id, index]));
     const add = (valueInput: string | null | undefined, detail: string, count = 1, rank?: number) => {
@@ -955,185 +1201,6 @@ export class InstructionService {
       })
       .slice(0, limit);
   }
-}
-
-export class SavedViewService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
-
-  async add(input: AddSavedViewInput): Promise<SavedView> {
-    const errors = validateInstructionQuery(input.query);
-    if (errors.length > 0) {
-      validation("Saved view query is invalid.", { errors });
-    }
-    const now = nowIso();
-    const view: SavedView = {
-      projectId: this.projectId,
-      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
-      name: input.name.trim(),
-      query: input.query.trim(),
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null
-    };
-    if (!view.name) validation("Saved view name is required.");
-    await this.store.transaction(async (repos) => {
-      if (await repos.views.get(this.projectId, view.id)) conflict(`Saved view already exists: ${view.id}`);
-      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.name === view.name);
-      if (duplicate) conflict(`Saved view name already exists: ${view.name}`);
-      await repos.views.create(view);
-      await repos.activity.append(this.activity.make(this.projectId, "view.created", "view", view.id, `Created saved view ${view.name}`, { query: view.query }));
-    });
-    return view;
-  }
-
-  async edit(idInput: string, input: EditSavedViewInput): Promise<SavedView> {
-    const id = normalizeId(idInput);
-    if (input.query !== undefined) {
-      const errors = validateInstructionQuery(input.query);
-      if (errors.length > 0) validation("Saved view query is invalid.", { errors });
-    }
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
-      const next: SavedView = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
-      if (!next.name) validation("Saved view name is required.");
-      const duplicate = (await repos.views.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
-      if (duplicate) conflict(`Saved view name already exists: ${next.name}`);
-      await repos.views.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "view.updated", "view", next.id, `Updated saved view ${next.name}`));
-      return next;
-    });
-  }
-
-  async archive(idInput: string): Promise<SavedView> {
-    const id = normalizeId(idInput);
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
-      const next = { ...existing, archivedAt: now, updatedAt: now };
-      await repos.views.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "view.archived", "view", id, `Archived saved view ${existing.name}`));
-      return next;
-    });
-  }
-
-  async restore(idInput: string): Promise<SavedView> {
-    const id = normalizeId(idInput);
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.views.get(this.projectId, id) ?? notFound("saved view", id);
-      const next = { ...existing, archivedAt: null, updatedAt: now };
-      await repos.views.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "view.restored", "view", id, `Restored saved view ${existing.name}`));
-      return next;
-    });
-  }
-
-  async list(includeArchived = false): Promise<SavedView[]> {
-    return (await this.store.views.list(this.projectId)).filter((view) => includeArchived || !view.archivedAt);
-  }
-
-  async get(idInput: string): Promise<SavedView> {
-    const id = normalizeId(idInput);
-    return await this.store.views.get(this.projectId, id) ?? notFound("saved view", id);
-  }
-
-  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
-    const view = await this.get(idInput);
-    return limit === undefined ? this.query.list({ where: view.query }) : (await this.query.list({ where: view.query })).slice(0, limit);
-  }
-}
-
-export class QueueFeedService {
-  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly query: QueryService, private readonly projectId: string) {}
-
-  async add(input: AddQueueFeedInput): Promise<QueueFeed> {
-    const errors = validateInstructionQuery(input.query);
-    if (errors.length > 0) {
-      validation("Queue feed query is invalid.", { errors });
-    }
-    const now = nowIso();
-    const feed: QueueFeed = {
-      projectId: this.projectId,
-      id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
-      name: input.name.trim(),
-      query: input.query.trim(),
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null
-    };
-    if (!feed.name) validation("Queue feed name is required.");
-    await this.store.transaction(async (repos) => {
-      if (await repos.feeds.get(this.projectId, feed.id)) conflict(`Queue feed already exists: ${feed.id}`);
-      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.name === feed.name);
-      if (duplicate) conflict(`Queue feed name already exists: ${feed.name}`);
-      await repos.feeds.create(feed);
-      await repos.activity.append(this.activity.make(this.projectId, "feed.created", "feed", feed.id, `Created queue feed ${feed.name}`, { query: feed.query }));
-    });
-    return feed;
-  }
-
-  async edit(idInput: string, input: EditQueueFeedInput): Promise<QueueFeed> {
-    const id = normalizeId(idInput);
-    if (input.query !== undefined) {
-      const errors = validateInstructionQuery(input.query);
-      if (errors.length > 0) validation("Queue feed query is invalid.", { errors });
-    }
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
-      const next: QueueFeed = { ...existing, name: input.name?.trim() ?? existing.name, query: input.query?.trim() ?? existing.query, updatedAt: now };
-      if (!next.name) validation("Queue feed name is required.");
-      const duplicate = (await repos.feeds.list(this.projectId)).find((item) => item.id !== id && item.name === next.name);
-      if (duplicate) conflict(`Queue feed name already exists: ${next.name}`);
-      await repos.feeds.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "feed.updated", "feed", next.id, `Updated queue feed ${next.name}`));
-      return next;
-    });
-  }
-
-  async archive(idInput: string): Promise<QueueFeed> {
-    const id = normalizeId(idInput);
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
-      const next = { ...existing, archivedAt: now, updatedAt: now };
-      await repos.feeds.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "feed.archived", "feed", id, `Archived queue feed ${existing.name}`));
-      return next;
-    });
-  }
-
-  async restore(idInput: string): Promise<QueueFeed> {
-    const id = normalizeId(idInput);
-    const now = nowIso();
-    return this.store.transaction(async (repos) => {
-      const existing = await repos.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
-      const next = { ...existing, archivedAt: null, updatedAt: now };
-      await repos.feeds.update(next);
-      await repos.activity.append(this.activity.make(this.projectId, "feed.restored", "feed", id, `Restored queue feed ${existing.name}`));
-      return next;
-    });
-  }
-
-  async list(includeArchived = false): Promise<QueueFeed[]> {
-    return (await this.store.feeds.list(this.projectId)).filter((feed) => includeArchived || !feed.archivedAt);
-  }
-
-  async get(idInput: string): Promise<QueueFeed> {
-    const id = normalizeId(idInput);
-    return await this.store.feeds.get(this.projectId, id) ?? notFound("queue feed", id);
-  }
-
-  async tasks(idInput: string, limit?: number): Promise<TaskView[]> {
-    const feed = await this.get(idInput);
-    const tasks = await this.query.list({ where: feed.query, status: "ready" });
-    return limit === undefined ? tasks : tasks.slice(0, limit);
-  }
-}
-
-export class QueryService {
-  constructor(private readonly store: AppStore, private readonly projectId: string) {}
 
   async list(filters: TaskListFilters = {}): Promise<TaskView[]> {
     const [tasks, dependencies, comments, tags, taskTags, tracks, assignments] = await Promise.all([
@@ -1277,7 +1344,7 @@ export class QueryService {
 
     views = this.applyFilters(views, filters);
     if (filters.where?.trim()) {
-      const queryMatches = new Set(matchInstructionQuery(filters.where, views, activeDependencies).map((match) => match.task.id));
+      const queryMatches = new Set(matchMatcherQuery(filters.where, views, activeDependencies).map((match) => match.task.id));
       views = views.filter((task) => queryMatches.has(task.id));
     }
     return sortTaskViews(views, filters.sort);
@@ -1328,8 +1395,8 @@ export class QueryService {
     };
   }
 
-  async previewInstructionQuery(query: string): Promise<InstructionPreview> {
-    const errors = validateInstructionQuery(query);
+  async previewMatcherQuery(query: string): Promise<MatcherPreview> {
+    const errors = validateMatcherQuery(query);
     if (errors.length > 0) {
       return { ok: false, query, errors, matches: [] };
     }
@@ -1341,7 +1408,7 @@ export class QueryService {
       ok: true,
       query,
       errors: [],
-      matches: matchInstructionQuery(query, tasks, dependencies).map((match) => ({
+      matches: matchMatcherQuery(query, tasks, dependencies).map((match) => ({
         instruction: {
           projectId: this.projectId,
           id: "__preview__",
@@ -1368,7 +1435,7 @@ export class QueryService {
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     const matches: InstructionMatch[] = [];
     for (const instruction of enabled) {
-      for (const match of matchInstructionQuery(instruction.query, tasks, dependencies)) {
+      for (const match of matchMatcherQuery(instruction.query, tasks, dependencies)) {
         matches.push({ instruction, task: match.task, reasons: match.reasons });
       }
     }
@@ -1727,9 +1794,9 @@ export class ImportService {
       }
 
       for (const instruction of data.instructions ?? []) {
-        const errors = validateInstructionQuery(instruction.query);
+        const errors = validateMatcherQuery(instruction.query);
         if (errors.length > 0) {
-          validation("Imported instruction query is invalid.", { instructionId: instruction.id, errors });
+          validation("Imported instruction matcher is invalid.", { instructionId: instruction.id, errors });
         }
         if (existingInstructionById.has(instruction.id)) {
           await repos.instructions.update(instruction);
@@ -1893,11 +1960,19 @@ function formatCount(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function normalizeInstructionSuggestionField(input: string): string {
+function activityTaskId(activity: Activity): string | null {
+  const dataTaskId = typeof activity.data.taskId === "string" ? normalizeId(activity.data.taskId) : null;
+  if (dataTaskId) {
+    return dataTaskId;
+  }
+  return activity.subjectType === "task" && activity.subjectId ? normalizeId(activity.subjectId) : null;
+}
+
+function normalizeMatcherSuggestionField(input: string): string {
   const normalized = input.trim().toLowerCase().replace(/\s+/g, " ");
-  const fields: string[] = instructionQueryGrammar().fields;
+  const fields: string[] = matcherQueryGrammar().fields;
   if (!fields.includes(normalized)) {
-    validation("Unknown instruction matcher field.", { field: input, fields });
+    validation("Unknown matcher field.", { field: input, fields });
   }
   return normalized;
 }

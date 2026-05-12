@@ -116,6 +116,30 @@ describe("unblock core services", () => {
     expect((await services.query.list({ where: "commented since now - 1d" })).map((task) => task.id)).toEqual(["API"]);
   });
 
+  it("releases started tasks with a required provenance-stamped comment", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "API", title: "API task" });
+    await expect(services.tasks.release("API", { reason: "Need a design decision" })).rejects.toBeInstanceOf(UnblockError);
+
+    await services.tasks.start("API");
+    const released = await services.tasks.release("API", { reason: "Need a design decision" });
+
+    expect(released.lifecycle).toBe("open");
+    expect(released.startedAt).toBeNull();
+    const comments = await services.comments.list("API");
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      machine: "test-machine",
+      actor: "test-actor",
+      body: "Released: Need a design decision"
+    });
+    const activity = await services.activity.list({ limit: 10 });
+    expect(activity.map((item) => item.type)).toEqual(expect.arrayContaining(["task.released", "comment.created"]));
+    expect(activity.find((item) => item.type === "task.released")?.task?.id).toBe("API");
+  });
+
   it("rejects parent cycles", async () => {
     const store = createMemoryStore();
     const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
@@ -401,6 +425,22 @@ describe("unblock core services", () => {
     const markdown = await services.exports.markdown({ where: "tag = backend", limit: 10 });
     expect(markdown).toContain("### `API` API work");
     expect(markdown).not.toContain("### `WEB` Web work");
+  });
+
+  it("uses the matcher language to filter activity by attached task", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "API", title: "API work", priority: 3 });
+    await services.tasks.add({ id: "WEB", title: "Web work", priority: 1 });
+    await services.tasks.start("API");
+    await services.comments.add("WEB", { body: "Web note" });
+
+    const activity = await services.activity.list({ where: "priority >= 3", limit: 20 });
+
+    expect(activity.length).toBeGreaterThan(0);
+    expect(activity.every((item) => item.task?.id === "API")).toBe(true);
+    expect(activity.map((item) => item.type)).toEqual(expect.arrayContaining(["task.started"]));
   });
 
   it("matches lifecycle timestamps with presence, dates, and relative time", async () => {

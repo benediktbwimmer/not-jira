@@ -7,7 +7,7 @@ import {
   defaultUnblockConfigPath,
   defaultUnblockDbPath,
   formatExplain,
-  instructionQueryGrammar,
+  matcherQueryGrammar,
   MigrationService,
   UnblockError,
   publicUnblockConfig,
@@ -145,6 +145,7 @@ export function createApp(options: ServerOptions = {}) {
   app.post("/api/tasks/:id/restore", async (c) => c.json(await (await scopedServices(c)).tasks.restore(c.req.param("id"))));
   app.post("/api/tasks/:id/start", async (c) => c.json(await (await scopedServices(c)).tasks.start(c.req.param("id"))));
   app.post("/api/tasks/:id/finish", async (c) => c.json(await (await scopedServices(c)).tasks.finish(c.req.param("id"))));
+  app.post("/api/tasks/:id/release", async (c) => c.json(await (await scopedServices(c)).tasks.release(c.req.param("id"), await c.req.json())));
   app.post("/api/tasks/:id/reopen", async (c) => c.json(await (await scopedServices(c)).tasks.reopen(c.req.param("id"))));
 
   app.get("/api/tasks/:id/explain", async (c) => {
@@ -203,11 +204,16 @@ export function createApp(options: ServerOptions = {}) {
     return c.json({ ok: true });
   });
 
-  app.get("/api/activity", async (c) => c.json(await (await scopedServices(c)).activity.list(Number(c.req.query("limit") ?? 100))));
-  app.get("/api/instructions/grammar", (c) => c.json(instructionQueryGrammar()));
-  app.get("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.list(c.req.query("includeArchived") === "true")));
-  app.post("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.add(await c.req.json()), 201));
-  app.get("/api/instructions/suggest", async (c) => {
+  app.get("/api/activity", async (c) => {
+    const where = c.req.query("where");
+    const input: { limit: number; where?: string } = { limit: Number(c.req.query("limit") ?? 100) };
+    if (where !== undefined) {
+      input.where = where;
+    }
+    return c.json(await (await scopedServices(c)).activity.list(input));
+  });
+  app.get("/api/matcher/grammar", (c) => c.json(matcherQueryGrammar()));
+  app.get("/api/matcher/suggest", async (c) => {
     const field = c.req.query("field") ?? "";
     const limit = Number(c.req.query("limit"));
     const input: { prefix?: string; limit: number } = { limit };
@@ -215,8 +221,10 @@ export function createApp(options: ServerOptions = {}) {
     if (prefix !== undefined) {
       input.prefix = prefix;
     }
-    return c.json(await (await scopedServices(c)).instructions.suggest(field, input));
+    return c.json(await (await scopedServices(c)).query.suggest(field, input));
   });
+  app.get("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.list(c.req.query("includeArchived") === "true")));
+  app.post("/api/instructions", async (c) => c.json(await (await scopedServices(c)).instructions.add(await c.req.json()), 201));
   app.get("/api/instructions/:id", async (c) => c.json(await (await scopedServices(c)).instructions.get(c.req.param("id"))));
   app.patch("/api/instructions/:id", async (c) => c.json(await (await scopedServices(c)).instructions.edit(c.req.param("id"), await c.req.json())));
   app.post("/api/instructions/:id/archive", async (c) => c.json(await (await scopedServices(c)).instructions.archive(c.req.param("id"))));
@@ -331,7 +339,7 @@ function defined<T extends Record<string, unknown>>(value: T): T {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.PORT ?? 3000);
+  const port = Number(process.env.PORT ?? process.env.UNBLOCK_API_PORT ?? 39217);
   serve({
     fetch: createApp({
       databasePath: process.env.UNBLOCK_DB ?? defaultUnblockDbPath(),
