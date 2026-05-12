@@ -7,20 +7,21 @@ export function formatTaskTable(tasks: TaskView[]): string {
     priorityLabel(task.priority),
     String(task.dependencyDepth),
     String(task.transitiveDependentsCount),
+    String(task.commentCount),
     task.descendantsCount > 0 ? `${task.subtreeProgress}%` : "",
     task.rollupStatus === "blocked-by-children" ? `${task.unfinishedDescendantsCount} child blockers` : "",
     task.parentTaskId ?? "",
     task.assignedTrack ? formatActorRef(task.assignedTrack) : "",
     `${"  ".repeat(task.hierarchyDepth)}${task.title}`
   ]);
-  return table(["ID", "Status", "Priority", "Depth", "Unblocks", "Progress", "Rollup", "Parent", "Actor", "Title"], rows);
+  return table(["ID", "Status", "Priority", "Depth", "Unblocks", "Comments", "Progress", "Rollup", "Parent", "Actor", "Title"], rows);
 }
 
 export function formatTaskMarkdown(tasks: TaskView[]): string {
-  const lines = ["| ID | Status | Priority | Depth | Unblocks | Progress | Rollup | Parent | Actor | Title |", "| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |"];
+  const lines = ["| ID | Status | Priority | Depth | Unblocks | Comments | Progress | Rollup | Parent | Actor | Title |", "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |"];
   for (const task of tasks) {
     const rollup = task.rollupStatus === "blocked-by-children" ? `${task.unfinishedDescendantsCount} child blockers` : "";
-    lines.push(`| ${task.id} | ${task.computedStatus} | ${priorityLabel(task.priority)} | ${task.dependencyDepth} | ${task.transitiveDependentsCount} | ${task.descendantsCount > 0 ? `${task.subtreeProgress}%` : ""} | ${rollup} | ${task.parentTaskId ?? ""} | ${task.assignedTrack ? formatActorRef(task.assignedTrack) : ""} | ${task.title.replace(/\|/g, "\\|")} |`);
+    lines.push(`| ${task.id} | ${task.computedStatus} | ${priorityLabel(task.priority)} | ${task.dependencyDepth} | ${task.transitiveDependentsCount} | ${task.commentCount} | ${task.descendantsCount > 0 ? `${task.subtreeProgress}%` : ""} | ${rollup} | ${task.parentTaskId ?? ""} | ${task.assignedTrack ? formatActorRef(task.assignedTrack) : ""} | ${task.title.replace(/\|/g, "\\|")} |`);
   }
   return lines.join("\n");
 }

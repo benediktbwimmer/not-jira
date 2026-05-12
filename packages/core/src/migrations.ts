@@ -397,6 +397,28 @@ export const sqliteMigrations: StoreMigration[] = [
       create index if not exists idx_saved_views_project_archived on saved_views(project_id, archived_at);
       create index if not exists idx_queue_feeds_project_archived on queue_feeds(project_id, archived_at);
     `
+  },
+  {
+    id: "0006",
+    name: "add comments",
+    sql: `
+      create table if not exists comments (
+        project_id text not null references projects(id) on delete restrict,
+        id text not null,
+        task_id text not null,
+        machine text not null,
+        actor text not null,
+        body text not null,
+        created_at text not null,
+        updated_at text not null,
+        archived_at text null,
+        primary key (project_id, id),
+        foreign key (project_id, task_id) references tasks(project_id, id) on delete cascade
+      );
+
+      create index if not exists idx_comments_project_task_created on comments(project_id, task_id, created_at);
+      create index if not exists idx_comments_project_archived on comments(project_id, archived_at);
+    `
   }
 ];
 

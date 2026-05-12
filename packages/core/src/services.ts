@@ -21,16 +21,19 @@ import {
   normalizeId,
   slugify,
   type AddProjectInput,
+  type AddCommentInput,
   type AddInstructionInput,
   type AddQueueFeedInput,
   type AddSavedViewInput,
   type Activity,
+  type Comment,
   type AddTagInput,
   type AddTaskInput,
   type AddTrackInput,
   type Dependency,
   type DependencyExplanation,
   type EditTaskInput,
+  type EditCommentInput,
   type EditInstructionInput,
   type EditQueueFeedInput,
   type EditSavedViewInput,
@@ -67,6 +70,7 @@ export interface Services {
   projects: ProjectService;
   tasks: TaskService;
   dependencies: DependencyService;
+  comments: CommentService;
   tags: TagService;
   tracks: TrackService;
   instructions: InstructionService;
@@ -91,6 +95,7 @@ export function createServices(store: AppStore, options: ServiceOptions = {}): S
   const query = new QueryService(store, projectId);
   const tasks = new TaskService(store, activity, projectId);
   const dependencies = new DependencyService(store, activity, projectId);
+  const comments = new CommentService(store, activity, projectId);
   const tags = new TagService(store, activity, projectId);
   const tracks = new TrackService(store, activity, query, projectId);
   const instructions = new InstructionService(store, activity, query, projectId);
@@ -98,7 +103,7 @@ export function createServices(store: AppStore, options: ServiceOptions = {}): S
   const feeds = new QueueFeedService(store, activity, query, projectId);
   const imports = new ImportService(store, activity, tasks, tracks, projectId);
   const exports = new ExportService(store, projectId);
-  return { projects, tasks, dependencies, tags, tracks, instructions, views, feeds, query, imports, exports, activity };
+  return { projects, tasks, dependencies, comments, tags, tracks, instructions, views, feeds, query, imports, exports, activity };
 }
 
 function makeActivity(projectId: string | null, type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown>, provenance: { machine: string; actor: string }): Activity {
@@ -486,6 +491,91 @@ export class DependencyService {
   }
 }
 
+export class CommentService {
+  constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly projectId: string) {}
+
+  async add(taskIdInput: string, input: AddCommentInput): Promise<Comment> {
+    const taskId = normalizeId(taskIdInput);
+    const body = normalizeCommentBody(input.body);
+    const provenance = this.activity.provenance();
+    const now = nowIso();
+    const comment: Comment = {
+      projectId: this.projectId,
+      id: randomUUID(),
+      taskId,
+      machine: provenance.machine,
+      actor: provenance.actor,
+      body,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null
+    };
+    await this.store.transaction(async (repos) => {
+      await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
+      await repos.comments.create(comment);
+      await repos.activity.append(this.activity.make(this.projectId, "comment.created", "comment", comment.id, `Commented on ${taskId}`, { taskId }));
+    });
+    return comment;
+  }
+
+  async list(taskIdInput: string, options: { includeArchived?: boolean | undefined; limit?: number | undefined } = {}): Promise<Comment[]> {
+    const taskId = normalizeId(taskIdInput);
+    await this.store.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
+    const comments = (await this.store.comments.listForTask(this.projectId, taskId))
+      .filter((comment) => options.includeArchived || !comment.archivedAt);
+    if (options.limit === undefined) {
+      return comments;
+    }
+    const limit = normalizeQueryLimit(options.limit);
+    return comments.slice(Math.max(0, comments.length - limit));
+  }
+
+  async get(idInput: string): Promise<Comment> {
+    const id = normalizeCommentId(idInput);
+    return await this.store.comments.get(this.projectId, id) ?? notFound("comment", id);
+  }
+
+  async edit(idInput: string, input: EditCommentInput): Promise<Comment> {
+    const id = normalizeCommentId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.comments.get(this.projectId, id) ?? notFound("comment", id);
+      const next: Comment = {
+        ...existing,
+        body: input.body === undefined ? existing.body : normalizeCommentBody(input.body),
+        updatedAt: now
+      };
+      await repos.comments.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "comment.updated", "comment", id, `Updated comment on ${next.taskId}`, { taskId: next.taskId }));
+      return next;
+    });
+  }
+
+  async archive(idInput: string): Promise<Comment> {
+    const id = normalizeCommentId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.comments.get(this.projectId, id) ?? notFound("comment", id);
+      const next = { ...existing, archivedAt: now, updatedAt: now };
+      await repos.comments.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "comment.archived", "comment", id, `Archived comment on ${existing.taskId}`, { taskId: existing.taskId }));
+      return next;
+    });
+  }
+
+  async restore(idInput: string): Promise<Comment> {
+    const id = normalizeCommentId(idInput);
+    const now = nowIso();
+    return this.store.transaction(async (repos) => {
+      const existing = await repos.comments.get(this.projectId, id) ?? notFound("comment", id);
+      const next = { ...existing, archivedAt: null, updatedAt: now };
+      await repos.comments.update(next);
+      await repos.activity.append(this.activity.make(this.projectId, "comment.restored", "comment", id, `Restored comment on ${existing.taskId}`, { taskId: existing.taskId }));
+      return next;
+    });
+  }
+}
+
 export class TagService {
   constructor(private readonly store: AppStore, private readonly activity: ActivityService, private readonly projectId: string) {}
 
@@ -817,6 +907,8 @@ export class InstructionService {
         add(String(priority), "priority", 0);
         add(`P${priority}`, "priority label", 0);
       }
+    } else if (field === "comments") {
+      for (const count of [0, 1, 2, 3, 5, 10]) add(String(count), "comment count", 0);
     } else if (["created", "updated", "started", "finished", "archived"].includes(field)) {
       add("now", "current instant", 0);
       add("today", "local day start", 0);
@@ -1032,9 +1124,10 @@ export class QueryService {
   constructor(private readonly store: AppStore, private readonly projectId: string) {}
 
   async list(filters: TaskListFilters = {}): Promise<TaskView[]> {
-    const [tasks, dependencies, tags, taskTags, tracks, assignments] = await Promise.all([
+    const [tasks, dependencies, comments, tags, taskTags, tracks, assignments] = await Promise.all([
       this.store.tasks.list(this.projectId),
       this.store.dependencies.list(this.projectId),
+      this.store.comments.list(this.projectId),
       this.store.tags.list(this.projectId),
       this.store.tags.listTaskTags(this.projectId),
       this.store.tracks.list(this.projectId),
@@ -1062,8 +1155,21 @@ export class QueryService {
     }
 
     const assignmentByTask = new Map(assignments.map((assignment) => [assignment.taskId, assignment]));
+    const recentCommentThreshold = Date.now() - 24 * 60 * 60 * 1000;
+    const commentsByTask = new Map<string, Comment[]>();
+    for (const comment of comments) {
+      if (comment.archivedAt) {
+        continue;
+      }
+      const existing = commentsByTask.get(comment.taskId) ?? [];
+      existing.push(comment);
+      commentsByTask.set(comment.taskId, existing);
+    }
 
     let views = tasks.map((task): TaskView => {
+      const taskComments = commentsByTask.get(task.id) ?? [];
+      const sortedComments = [...taskComments].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+      const commentAuthors = [...new Set(sortedComments.map((comment) => formatActorRef(comment)))].sort();
       const dependencyIds = graph.dependenciesByTask.get(task.id) ?? [];
       let unfinishedDependenciesCount = 0;
       let finishedDependenciesCount = 0;
@@ -1114,7 +1220,11 @@ export class QueryService {
         unfinishedDescendantsCount: 0,
         criticalChildPath: [],
         assignedTrack: assignment && track ? { trackId: track.id, machine: track.machine, actor: track.actor, name: track.name, position: assignment.position } : null,
-        tags: [...(tagsByTask.get(task.id) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+        tags: [...(tagsByTask.get(task.id) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+        commentCount: sortedComments.length,
+        recentCommentCount: sortedComments.filter((comment) => Date.parse(comment.createdAt) >= recentCommentThreshold).length,
+        lastCommentAt: sortedComments.at(-1)?.createdAt ?? null,
+        commentAuthors
       };
     });
 
@@ -1520,6 +1630,8 @@ export class ImportService {
     let tracksUpdated = 0;
     let instructionsCreated = 0;
     let instructionsUpdated = 0;
+    let commentsCreated = 0;
+    let commentsUpdated = 0;
     let dependenciesAdded = 0;
     let taskTagsAdded = 0;
     let assignmentsAdded = 0;
@@ -1561,6 +1673,8 @@ export class ImportService {
       const existingTrackById = new Map(existingTracks.map((track) => [track.id, track]));
       const existingInstructions = await repos.instructions.list(this.projectId);
       const existingInstructionById = new Map(existingInstructions.map((instruction) => [instruction.id, instruction]));
+      const existingComments = await repos.comments.list(this.projectId);
+      const existingCommentById = new Map(existingComments.map((comment) => [comment.id, comment]));
       const existingTaskTags = new Set((await repos.tags.listTaskTags(this.projectId)).map((taskTag) => taskTagKey(taskTag.taskId, taskTag.tagId)));
       const existingAssignments = new Map((await repos.tracks.listAssignments(this.projectId)).map((assignment) => [assignment.taskId, assignment]));
 
@@ -1611,6 +1725,19 @@ export class ImportService {
         } else {
           await repos.instructions.create(instruction);
           instructionsCreated += 1;
+        }
+      }
+
+      for (const comment of data.comments ?? []) {
+        if (!combinedTaskById.has(comment.taskId)) {
+          validation("Imported comment references a missing task.", { commentId: comment.id, taskId: comment.taskId });
+        }
+        if (existingCommentById.has(comment.id)) {
+          await repos.comments.update(comment);
+          commentsUpdated += 1;
+        } else {
+          await repos.comments.create(comment);
+          commentsCreated += 1;
         }
       }
 
@@ -1669,6 +1796,8 @@ export class ImportService {
         tracksUpdated,
         instructionsCreated,
         instructionsUpdated,
+        commentsCreated,
+        commentsUpdated,
         dependenciesAdded,
         taskTagsAdded,
         assignmentsAdded,
@@ -1686,6 +1815,8 @@ export class ImportService {
       tracksUpdated,
       instructionsCreated,
       instructionsUpdated,
+      commentsCreated,
+      commentsUpdated,
       dependenciesAdded,
       taskTagsAdded,
       assignmentsAdded,
@@ -1731,6 +1862,7 @@ function scopeExportData(data: JsonExport, taskIds: Set<string>): JsonExport {
   if (data.instructions) scoped.instructions = data.instructions;
   if (data.views) scoped.views = data.views;
   if (data.feeds) scoped.feeds = data.feeds;
+  if (data.comments) scoped.comments = data.comments.filter((comment) => taskIds.has(comment.taskId));
   return scoped;
 }
 
@@ -1770,6 +1902,25 @@ function normalizeQueryLimit(input: number): number {
     validation("Query limit must be a positive integer.", { limit: input });
   }
   return Math.min(input, 1000);
+}
+
+function normalizeCommentId(input: string): string {
+  const id = input.trim();
+  if (!id) {
+    validation("Comment id is required.");
+  }
+  return id;
+}
+
+function normalizeCommentBody(input: string): string {
+  const body = input.trim();
+  if (!body) {
+    validation("Comment body is required.");
+  }
+  if (body.length > 20000) {
+    validation("Comment body is too long.", { maxLength: 20000 });
+  }
+  return body;
 }
 
 function idPrefixes(id: string): string[] {
@@ -1841,8 +1992,11 @@ function validateFinishedParents(tasks: Task[]): void {
 }
 
 async function findTrack(repos: RepositorySet, projectId: string, actorOrId: string, defaultMachine: string): Promise<Track> {
+  const raw = actorOrId.trim();
   const identity = parseActorRef(actorOrId, defaultMachine);
-  return await repos.tracks.get(projectId, normalizeId(actorOrId))
+  return await repos.tracks.get(projectId, raw)
+    ?? await repos.tracks.get(projectId, normalizeId(raw))
+    ?? await repos.tracks.get(projectId, slugify(raw))
     ?? await repos.tracks.findByActor(projectId, identity.machine, identity.actor)
     ?? notFound("track", actorOrId);
 }
@@ -1922,6 +2076,15 @@ function normalizeJsonImport(input: unknown, now: string): JsonExport {
     instructionNames.add(instruction.name);
   }
 
+  const comments = ensureArray(record.comments, "comments").map((comment) => normalizeImportedComment(comment, now));
+  const commentIds = new Set<string>();
+  for (const comment of comments) {
+    if (commentIds.has(comment.id)) {
+      validation("JSON import contains duplicate comment ids.", { commentId: comment.id });
+    }
+    commentIds.add(comment.id);
+  }
+
   return {
     tasks,
     dependencies: ensureArray(record.dependencies, "dependencies").map((dependency) => normalizeImportedDependency(dependency, now)),
@@ -1929,7 +2092,8 @@ function normalizeJsonImport(input: unknown, now: string): JsonExport {
     taskTags: ensureArray(record.taskTags, "taskTags").map((taskTag) => normalizeImportedTaskTag(taskTag, now)),
     tracks,
     assignments: ensureArray(record.assignments, "assignments").map((assignment) => normalizeImportedAssignment(assignment, now)),
-    instructions
+    instructions,
+    comments
   };
 }
 
@@ -1944,6 +2108,15 @@ function scopeJsonExport(data: JsonExport, projectId: string): JsonExport {
   };
   if (data.instructions) {
     scoped.instructions = data.instructions.map((instruction) => ({ ...instruction, projectId }));
+  }
+  if (data.views) {
+    scoped.views = data.views.map((view) => ({ ...view, projectId }));
+  }
+  if (data.feeds) {
+    scoped.feeds = data.feeds.map((feed) => ({ ...feed, projectId }));
+  }
+  if (data.comments) {
+    scoped.comments = data.comments.map((comment) => ({ ...comment, projectId }));
   }
   if (data.activity) {
     scoped.activity = data.activity.map((activity) => ({
@@ -2070,6 +2243,22 @@ function normalizeImportedInstruction(input: unknown, now: string): Instruction 
     query,
     body: optionalStringField(record, "body") ?? "",
     enabled: booleanField(record, "enabled") ?? true,
+    createdAt: optionalStringField(record, "createdAt") ?? now,
+    updatedAt: optionalStringField(record, "updatedAt") ?? now,
+    archivedAt: optionalStringField(record, "archivedAt")
+  };
+}
+
+function normalizeImportedComment(input: unknown, now: string): Comment {
+  const record = requireRecord(input, "comment");
+  const id = optionalStringField(record, "id")?.trim() || randomUUID();
+  return {
+    projectId: DEFAULT_PROJECT_ID,
+    id,
+    taskId: normalizeId(stringField(record, "taskId")),
+    machine: optionalStringField(record, "machine") ?? "unknown-machine",
+    actor: optionalStringField(record, "actor") ?? "unknown",
+    body: normalizeCommentBody(stringField(record, "body")),
     createdAt: optionalStringField(record, "createdAt") ?? now,
     updatedAt: optionalStringField(record, "updatedAt") ?? now,
     archivedAt: optionalStringField(record, "archivedAt")

@@ -2,9 +2,10 @@ import type { AppStore } from "./store.js";
 import { priorityLabel, type JsonExport, type TaskView } from "./types.js";
 
 export async function exportStoreJson(store: AppStore, includeActivity = false, projectId?: string): Promise<JsonExport> {
-  const [tasks, dependencies, tags, taskTags, tracks, assignments, instructions, views, feeds, activity] = await Promise.all([
+  const [tasks, dependencies, comments, tags, taskTags, tracks, assignments, instructions, views, feeds, activity] = await Promise.all([
     store.tasks.list(projectId),
     store.dependencies.list(projectId),
+    store.comments.list(projectId),
     store.tags.list(projectId),
     store.tags.listTaskTags(projectId),
     store.tracks.list(projectId),
@@ -17,6 +18,7 @@ export async function exportStoreJson(store: AppStore, includeActivity = false, 
   const result: JsonExport = {
     tasks,
     dependencies,
+    comments,
     tags,
     taskTags,
     tracks,
@@ -35,6 +37,7 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const dependenciesByTask = groupBy(data.dependencies, (dependency) => dependency.taskId);
   const dependentsByTask = groupBy(data.dependencies, (dependency) => dependency.dependsOnTaskId);
+  const commentsByTask = groupBy(data.comments ?? [], (comment) => comment.taskId);
   const assignmentsByTrack = groupBy(data.assignments, (assignment) => assignment.trackId);
   const assignmentByTask = new Map(data.assignments.map((assignment) => [assignment.taskId, assignment]));
   const trackById = new Map(data.tracks.map((track) => [track.id, track]));
@@ -50,6 +53,7 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
   lines.push(`- Finished: ${tasks.filter((task) => task.computedStatus === "finished").length}`);
   lines.push(`- Archived: ${tasks.filter((task) => task.computedStatus === "archived").length}`);
   lines.push(`- Dependencies: ${data.dependencies.length}`);
+  lines.push(`- Comments: ${data.comments?.length ?? 0}`);
   lines.push(`- Tags: ${data.tags.length}`);
   lines.push(`- Actor queues: ${data.tracks.length}`);
   lines.push(`- Instructions: ${data.instructions?.length ?? 0}`);
@@ -96,6 +100,15 @@ export function exportMarkdown(tasks: TaskView[], data: JsonExport): string {
     lines.push("");
     lines.push(formatDescription(task.description));
     lines.push("");
+    const comments = commentsByTask.get(task.id)?.filter((comment) => !comment.archivedAt) ?? [];
+    if (comments.length > 0) {
+      lines.push("Comments:", "");
+      for (const comment of comments) {
+        lines.push(`- ${comment.createdAt} ${formatActorRef(comment)}`);
+        lines.push(indentBlock(formatDescription(comment.body), "  "));
+      }
+      lines.push("");
+    }
   }
 
   lines.push("## Dependencies", "");
@@ -222,6 +235,10 @@ function formatRollup(task: TaskView): string {
 
 function escapeInline(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function indentBlock(value: string, prefix: string): string {
+  return value.split("\n").map((line) => `${prefix}${line}`).join("\n");
 }
 
 function formatActorRef(identity: { machine: string; actor: string }): string {

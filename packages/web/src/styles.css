@@ -11,10 +11,20 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+  min-height: 0;
 }
 
 button,
@@ -63,7 +73,9 @@ textarea {
 .app-shell {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -197,8 +209,10 @@ textarea {
 
 .workspace {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .toolbar {
@@ -338,7 +352,9 @@ textarea {
   grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
   gap: 14px;
   padding: 14px;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 .task-list-panel,
@@ -351,6 +367,9 @@ textarea {
 
 .task-list-panel {
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -439,8 +458,9 @@ h3 {
 }
 
 .task-tree {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
-  max-height: calc(100vh - 178px);
 }
 
 .task-list-header {
@@ -683,6 +703,44 @@ h3 {
   background: #eaf0fa;
 }
 
+.comment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #d7dce6;
+  border-radius: 4px;
+  background: #eef1f5;
+  color: #526071;
+  padding: 2px 5px;
+  font: inherit;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+button.comment-chip {
+  min-height: 0;
+  cursor: pointer;
+}
+
+.comment-chip.recent {
+  border-color: #88cfb6;
+  background: #e5f5ef;
+  color: #0f7459;
+}
+
+.task-meta .comment-chip span,
+.task-mini .comment-chip span {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+
+button.comment-chip:hover {
+  border-color: #8ea0b8;
+  background: #f8fafc;
+}
+
 .task-signals {
   display: grid;
   align-items: center;
@@ -752,10 +810,7 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  align-self: start;
-  position: sticky;
-  top: 72px;
-  max-height: calc(100vh - 86px);
+  min-height: 0;
   overflow: auto;
 }
 
@@ -876,6 +931,62 @@ h3 {
 .markdown-content h3,
 .markdown-content h4 {
   font-size: 14px;
+}
+
+.comments-section {
+  gap: 10px;
+}
+
+.comment-list {
+  display: grid;
+  gap: 10px;
+}
+
+.comment-card {
+  border: 1px solid #e2e6ee;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.comment-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #657083;
+  font-size: 12px;
+}
+
+.comment-meta span:first-child {
+  color: #344054;
+  font-weight: 700;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: #526071;
+  padding: 0;
+  font-size: 12px;
+  height: auto;
+}
+
+.text-button:hover:not(:disabled) {
+  color: #18212f;
+  background: transparent;
+}
+
+.comment-form {
+  display: grid;
+  gap: 8px;
+}
+
+.comment-form textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 .markdown-content ul,
@@ -1122,6 +1233,9 @@ h3 {
 .wide-view {
   margin: 14px;
   padding-bottom: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .inline-create {
@@ -1206,6 +1320,12 @@ h3 {
   font-size: 13px;
 }
 
+.task-mini .comment-chip {
+  justify-self: start;
+  margin-top: 3px;
+  font-size: 12px;
+}
+
 .muted {
   color: #657083;
 }
@@ -1222,6 +1342,9 @@ h3 {
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(300px, 360px);
   gap: 14px;
   padding: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .instruction-list-panel,
@@ -1231,6 +1354,8 @@ h3 {
   border: 1px solid #d9dee8;
   border-radius: 8px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 .instruction-list {
@@ -1283,12 +1408,7 @@ h3 {
   display: grid;
   gap: 14px;
   align-content: start;
-  align-self: start;
   padding: 14px;
-  position: sticky;
-  top: 72px;
-  max-height: calc(100vh - 86px);
-  overflow: auto;
 }
 
 .instruction-grammar-panel p {
@@ -1589,6 +1709,7 @@ kbd {
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .sidebar {
@@ -1610,6 +1731,7 @@ kbd {
 
   .task-layout {
     grid-template-columns: 1fr;
+    overflow: auto;
   }
 
   .instruction-layout {
@@ -1851,6 +1973,7 @@ kbd {
   .more-chip,
   .dependency-item,
   .task-mini,
+  .comment-card,
   .instruction-list-item,
   .match-row,
   .monaco-shell,
@@ -1868,9 +1991,30 @@ kbd {
   }
 
   .task-mini,
+  .comment-card,
   .instruction-list-item,
   .match-row {
     background: #202630;
+  }
+
+  .comment-meta {
+    color: #8f9bad;
+  }
+
+  .comment-meta span:first-child {
+    color: #edf2f7;
+  }
+
+  .comment-card .markdown-content {
+    color: #d5dce7;
+  }
+
+  .comment-card .text-button {
+    color: #a8b2c1;
+  }
+
+  .comment-card .text-button:hover:not(:disabled) {
+    color: #edf2f7;
   }
 
   .task-mini.clickable:hover,

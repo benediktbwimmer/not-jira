@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, Option } from "commander";
+import { parse as parseYaml } from "yaml";
 import {
   createServices,
   createSqliteStore,
@@ -20,13 +21,18 @@ import {
   UnblockError,
   prioritySchema,
   readUnblockConfig,
+  slugify,
   updateUnblockConfig,
+  type AddTaskInput,
   type ComputedStatus,
   type EditInstructionInput,
   type EditQueueFeedInput,
   type EditSavedViewInput,
+  type EditTaskInput,
+  type Lifecycle,
   type OutputFormat,
   type Priority,
+  type TaskSize,
   type TaskListFilters,
   type TaskSort
 } from "@unblock/core";
@@ -39,6 +45,17 @@ interface GlobalOptions {
 }
 
 const program = new Command();
+const TASK_MUTATION_HELP = `
+Required context:
+  Pass --project <id> and --actor <name>. Machine comes from unblock config.
+`;
+const TRACK_MUTATION_HELP = `
+Required context:
+  Pass --project <id> and --actor <name>. Machine comes from unblock config.
+
+Track references:
+  Commands accept the displayed queue id, actor, or machine:actor.
+`;
 
 program
   .name("unblock")
@@ -199,8 +216,14 @@ project.command("restore")
 const task = program.command("task")
   .description("Task commands")
   .addHelpText("after", `
-Project scope:
+Required context:
   Pass --project <id> on every task command. Project context is never sticky.
+  Mutating task commands also require --actor <name>; machine comes from unblock config.
+
+Examples:
+  unblock --project PRISM task list
+  unblock --project PRISM --actor codex-a task add --id P-API --title "Implement API" --assign bw-mbp-codex-a
+  unblock --project PRISM --actor codex-a task depend P-API --on P-SCHEMA,P-TESTS
 
 Dependency rules:
   A dependency means TASK cannot proceed until DEP is finished.
@@ -219,21 +242,89 @@ task.command("add")
   .option("--section <section>", "source section")
   .option("--source-line <line>", "source line", parseInteger)
   .option("--completion-bar <text>", "completion bar")
-  .action(async (options) => withMutationServices(async ({ services }) => {
-    const created = await services.tasks.add(defined({
-      id: options.id,
-      title: options.title,
-      parentTaskId: options.parent ?? null,
-      description: options.description,
-      priority: options.priority,
-      size: options.size ?? null,
-      sourceDoc: options.source ?? null,
-      sourceSection: options.section ?? null,
-      sourceLine: options.sourceLine ?? null,
-      completionBar: options.completionBar ?? null
-    }));
-    print(created, format());
-  }));
+  .option("--assign <actorOrId>", "assign created task to actor queue id, actor, or machine:actor")
+  .option("--track <actorOrId>", "alias for --assign")
+  .option("--dry-run", "validate options and print the planned create without writing")
+  .action(async (options) => {
+    const input = addTaskInputFromOptions(options);
+    const assign = assignmentTarget(options);
+    if (options.dryRun) {
+      print({ dryRun: true, action: "task.add", task: input, assign }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      const created = await services.tasks.add(input);
+      if (!assign) {
+        print(created, format());
+        return;
+      }
+      const assignment = await services.tracks.assign(assign, created.id);
+      print({ task: created, assignment }, format());
+    });
+  });
+
+task.command("upsert")
+  .description("Create a task if missing, otherwise edit it")
+  .requiredOption("--id <id>", "task id")
+  .option("--title <title>", "task title; required when creating a missing task")
+  .option("--parent <id>", "parent task id; use none for root")
+  .option("--description <text>", "description")
+  .option("--lifecycle <lifecycle>", "open, started, finished")
+  .option("--priority <n>", "priority 0-4", parsePriority)
+  .option("--size <size>", "XS, S, M, L, XL; use none to clear")
+  .option("--source <doc>", "source document")
+  .option("--section <section>", "source section")
+  .option("--source-line <line>", "source line", parseInteger)
+  .option("--completion-bar <text>", "completion bar")
+  .option("--assign <actorOrId>", "assign upserted task to actor queue id, actor, or machine:actor")
+  .option("--track <actorOrId>", "alias for --assign")
+  .option("--dry-run", "validate options and print the planned upsert without writing")
+  .action(async (options) => {
+    const assign = assignmentTarget(options);
+    if (options.dryRun) {
+      print({
+        dryRun: true,
+        action: "task.upsert",
+        id: options.id,
+        create: addTaskInputFromOptions({ ...options, title: options.title ?? "<required when missing>" }),
+        edit: editTaskInputFromOptions(options),
+        assign
+      }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      const id = String(options.id);
+      let taskAction: "created" | "updated";
+      let taskResult;
+      try {
+        await services.tasks.get(id);
+        taskResult = await services.tasks.edit(id, editTaskInputFromOptions(options));
+        taskAction = "updated";
+      } catch (error) {
+        if (!(error instanceof UnblockError) || error.code !== "not_found") {
+          throw error;
+        }
+        if (!options.title) {
+          throw new UnblockError("validation", "task upsert requires --title when creating a missing task.");
+        }
+        taskResult = await services.tasks.add(addTaskInputFromOptions(options));
+        taskAction = "created";
+      }
+      let assignment = null;
+      let skippedAssignment = null;
+      if (assign) {
+        try {
+          assignment = await services.tracks.assign(assign, taskResult.id);
+        } catch (error) {
+          if (!(error instanceof UnblockError) || error.code !== "conflict") {
+            throw error;
+          }
+          skippedAssignment = { taskId: taskResult.id, assign, reason: error.message };
+        }
+      }
+      print({ action: taskAction, task: taskResult, assignment, skippedAssignment }, format());
+    });
+  });
 
 task.command("edit")
   .description("Edit a task")
@@ -248,21 +339,18 @@ task.command("edit")
   .option("--section <section>", "source section")
   .option("--source-line <line>", "source line", parseInteger)
   .option("--completion-bar <text>", "completion bar")
-  .action(async (id, options) => withMutationServices(async ({ services }) => {
-    const updated = await services.tasks.edit(id, defined({
-      title: options.title,
-      parentTaskId: options.parent === undefined ? undefined : options.parent === "none" ? null : options.parent,
-      description: options.description,
-      lifecycle: options.lifecycle,
-      priority: options.priority,
-      size: options.size === undefined ? undefined : options.size === "none" ? null : options.size,
-      sourceDoc: options.source,
-      sourceSection: options.section,
-      sourceLine: options.sourceLine,
-      completionBar: options.completionBar
-    }));
-    print(updated, format());
-  }));
+  .option("--dry-run", "validate options and print the planned edit without writing")
+  .action(async (id, options) => {
+    const input = editTaskInputFromOptions(options);
+    if (options.dryRun) {
+      print({ dryRun: true, action: "task.edit", id, changes: input }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      const updated = await services.tasks.edit(id, input);
+      print(updated, format());
+    });
+  });
 
 task.command("list")
   .description("List tasks")
@@ -333,10 +421,22 @@ task.command("explain")
 task.command("depend")
   .description("Add a hard dependency: TASK cannot proceed until DEP is finished")
   .argument("<taskId>")
-  .requiredOption("--on <dependencyId>", "dependency task; must not be an ancestor or descendant of TASK")
-  .action(async (taskId, options: { on: string }) => withMutationServices(async ({ services }) => {
-    print(await services.dependencies.add(taskId, options.on), format());
-  }));
+  .requiredOption("--on <dependencyIds...>", "dependency tasks, comma-separated or repeated; must not be ancestors or descendants of TASK")
+  .option("--dry-run", "print the dependency edges without writing")
+  .action(async (taskId, options: { on: string[]; dryRun?: boolean }) => {
+    const dependencies = parseIdList(options.on);
+    if (options.dryRun) {
+      print({ dryRun: true, action: "task.depend", taskId, dependencies }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      const added = [];
+      for (const dependencyId of dependencies) {
+        added.push(await services.dependencies.add(taskId, dependencyId));
+      }
+      print({ taskId, added }, format());
+    });
+  });
 
 task.command("undepend")
   .description("Remove a hard dependency from TASK")
@@ -351,14 +451,156 @@ task.command("set-dependencies")
   .description("Replace all dependencies for TASK")
   .argument("<taskId>")
   .option("--on <dependencyIds...>", "complete dependency task list; entries must not be ancestors or descendants of TASK")
-  .action(async (taskId, options: { on?: string[] }) => withMutationServices(async ({ services }) => {
-    print(await services.dependencies.set(taskId, options.on ?? []), format());
-  }));
+  .option("--dry-run", "print the replacement dependency set without writing")
+  .action(async (taskId, options: { on?: string[]; dryRun?: boolean }) => {
+    const dependencies = options.on === undefined ? [] : parseIdList(options.on);
+    if (options.dryRun) {
+      print({ dryRun: true, action: "task.set-dependencies", taskId, dependencies }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      print(await services.dependencies.set(taskId, dependencies), format());
+    });
+  });
 
 task.command("dependencies")
   .description("List dependencies for TASK")
   .argument("<taskId>")
   .action(async (taskId) => withServices(async ({ services }) => print(await services.dependencies.list(taskId), format())));
+
+task.command("import-tree")
+  .description("Import or upsert a task tree from JSON or YAML")
+  .argument("<file>")
+  .option("--dry-run", "parse and print the flattened import plan without writing")
+  .addHelpText("after", `
+Input shape:
+  tasks:
+    - id: P-ROLLOUT
+      title: Rollout
+      assign: bw-mbp-codex-a
+      tags: [backend]
+      dependsOn: [P-SCHEMA, P-TESTS]
+      children:
+        - id: P-ROLLOUT-API
+          title: API slice
+  dependencies:
+    - task: P-ROLLOUT-API
+      on: [P-SCHEMA]
+
+Use "track" as an alias for "assign"; use "dependsOn", "depends_on", or "dependencies" for task dependencies.`)
+  .action(async (file, options: { dryRun?: boolean }) => {
+    const plan = parseTaskImportTree(file, await readFile(file, "utf8"));
+    if (options.dryRun) {
+      print({ dryRun: true, ...plan }, format());
+      return;
+    }
+    await withMutationServices(async ({ services }) => {
+      const created = [];
+      const updated = [];
+      const assignments = [];
+      const assignmentsSkipped = [];
+      const tagAssignments = [];
+      const tagsCreated = [];
+      const dependencies = [];
+      const dependenciesSkipped = [];
+      for (const taskItem of plan.tasks) {
+        try {
+          await services.tasks.get(taskItem.id);
+          updated.push(await services.tasks.edit(taskItem.id, taskItem.input));
+        } catch (error) {
+          if (!(error instanceof UnblockError) || error.code !== "not_found") {
+            throw error;
+          }
+          created.push(await services.tasks.add({ id: taskItem.id, title: taskItem.title, ...taskItem.input }));
+        }
+        if (taskItem.assign) {
+          try {
+            assignments.push(await services.tracks.assign(taskItem.assign, taskItem.id));
+          } catch (error) {
+            if (!(error instanceof UnblockError) || error.code !== "conflict") {
+              throw error;
+            }
+            assignmentsSkipped.push({ taskId: taskItem.id, assign: taskItem.assign, reason: error.message });
+          }
+        }
+        for (const tagName of taskItem.tags) {
+          try {
+            await services.tags.assign(taskItem.id, [tagName]);
+          } catch (error) {
+            if (!(error instanceof UnblockError) || error.code !== "not_found") {
+              throw error;
+            }
+            tagsCreated.push(await services.tags.add({ id: tagName, name: tagName }));
+            await services.tags.assign(taskItem.id, [tagName]);
+          }
+          tagAssignments.push({ taskId: taskItem.id, tag: tagName });
+        }
+      }
+      for (const edge of plan.dependencies) {
+        try {
+          dependencies.push(await services.dependencies.add(edge.taskId, edge.dependsOnTaskId));
+        } catch (error) {
+          if (!(error instanceof UnblockError) || error.code !== "conflict") {
+            throw error;
+          }
+          dependenciesSkipped.push({ ...edge, reason: error.message });
+        }
+      }
+      print({
+        tasksCreated: created.length,
+        tasksUpdated: updated.length,
+        dependenciesAdded: dependencies.length,
+        dependenciesSkipped: dependenciesSkipped.length,
+        assignmentsCreated: assignments.length,
+        assignmentsSkipped: assignmentsSkipped.length,
+        tagAssignmentsCreated: tagAssignments.length,
+        tagsCreated: tagsCreated.length,
+        created,
+        updated,
+        dependencies,
+        skippedDependencies: dependenciesSkipped,
+        assignments,
+        skippedAssignments: assignmentsSkipped,
+        tags: tagsCreated,
+        tagAssignments
+      }, format());
+    });
+  });
+
+task.command("comment")
+  .description("Add a flat chronological markdown comment to TASK")
+  .argument("<taskId>")
+  .requiredOption("--body <markdown>", "comment body")
+  .action(async (taskId, options: { body: string }) => withMutationServices(async ({ services }) => {
+    print(await services.comments.add(taskId, { body: options.body }), format());
+  }));
+
+task.command("comments")
+  .description("List comments for TASK in chronological order")
+  .argument("<taskId>")
+  .requiredOption("--limit <n>", "maximum comments to return", parseInteger)
+  .option("--include-archived", "include archived comments")
+  .action(async (taskId, options: { limit: number; includeArchived?: boolean }) => withServices(async ({ services }) => {
+    print(await services.comments.list(taskId, { limit: options.limit, includeArchived: options.includeArchived }), format());
+  }));
+
+task.command("edit-comment")
+  .description("Edit a comment body")
+  .argument("<commentId>")
+  .requiredOption("--body <markdown>", "new comment body")
+  .action(async (commentId, options: { body: string }) => withMutationServices(async ({ services }) => {
+    print(await services.comments.edit(commentId, { body: options.body }), format());
+  }));
+
+task.command("archive-comment")
+  .description("Archive a comment")
+  .argument("<commentId>")
+  .action(async (commentId) => withMutationServices(async ({ services }) => print(await services.comments.archive(commentId), format())));
+
+task.command("restore-comment")
+  .description("Restore an archived comment")
+  .argument("<commentId>")
+  .action(async (commentId) => withMutationServices(async ({ services }) => print(await services.comments.restore(commentId), format())));
 
 for (const lifecycleCommand of [
   ["start", "started"],
@@ -512,8 +754,13 @@ tag.command("tasks")
 const track = program.command("track")
   .description("Actor queue commands")
   .addHelpText("after", `
-Project scope:
-  Pass --project <id> on every actor queue command. Project context is never sticky.`);
+Required context:
+  Pass --project <id> on every actor queue command. Project context is never sticky.
+  Mutating track commands also require --actor <name>; machine comes from unblock config.
+
+Track references:
+  Commands accept the displayed queue id, actor, or machine:actor.
+  Example: unblock --project PRISM --actor codex-a track assign bw-mbp-codex-a P-API`);
 
 track.command("add")
   .argument("<actor>")
@@ -550,7 +797,7 @@ track.command("show")
   .argument("<actorOrId>")
   .action(async (actorOrId) => withServices(async ({ services }) => {
     const tracks = await services.tracks.list();
-    const selected = tracks.find((item) => item.id === actorOrId || item.actor === actorOrId || `${item.machine}:${item.actor}` === actorOrId);
+    const selected = tracks.find((item) => matchesTrackReference(item, actorOrId));
     if (!selected) {
       throw new UnblockError("not_found", `track not found: ${actorOrId}`);
     }
@@ -806,6 +1053,18 @@ Project scope:
     }
   }));
 
+for (const command of task.commands) {
+  if (!new Set(["list", "show", "explain", "dependencies", "comments"]).has(command.name())) {
+    command.addHelpText("after", TASK_MUTATION_HELP);
+  }
+}
+
+for (const command of track.commands) {
+  if (!new Set(["list", "show"]).has(command.name())) {
+    command.addHelpText("after", TRACK_MUTATION_HELP);
+  }
+}
+
 program.parseAsync(process.argv).catch((error: unknown) => {
   if (error instanceof UnblockError) {
     console.error(`${error.code}: ${error.message}`);
@@ -936,6 +1195,269 @@ function combineMatcherQueries(left?: string, right?: string): string | undefine
 
 async function selectTasksByWhere(services: ReturnType<typeof createServices>, where: string, limit: number) {
   return services.query.match(where, limit, { includeFinished: true, includeArchived: true, sort: "dependency" });
+}
+
+function addTaskInputFromOptions(options: Record<string, unknown>): AddTaskInput {
+  const id = stringOption(options.id, "id");
+  const title = stringOption(options.title, "title");
+  return defined({
+    id,
+    title,
+    parentTaskId: options.parent === undefined ? null : parentOption(options.parent),
+    description: optionalStringOption(options.description),
+    lifecycle: optionalLifecycleOption(options.lifecycle),
+    priority: options.priority as Priority | undefined,
+    size: options.size === undefined ? null : taskSizeOption(options.size),
+    sourceDoc: options.source === undefined ? null : nullableStringOption(options.source),
+    sourceSection: options.section === undefined ? null : nullableStringOption(options.section),
+    sourceLine: options.sourceLine === undefined ? null : options.sourceLine,
+    completionBar: options.completionBar === undefined ? null : nullableStringOption(options.completionBar)
+  }) as AddTaskInput;
+}
+
+function editTaskInputFromOptions(options: Record<string, unknown>): EditTaskInput {
+  return defined({
+    title: optionalStringOption(options.title),
+    parentTaskId: options.parent === undefined ? undefined : parentOption(options.parent),
+    description: optionalStringOption(options.description),
+    lifecycle: optionalLifecycleOption(options.lifecycle),
+    priority: options.priority as Priority | undefined,
+    size: options.size === undefined ? undefined : taskSizeOption(options.size),
+    sourceDoc: optionalStringOption(options.source),
+    sourceSection: optionalStringOption(options.section),
+    sourceLine: options.sourceLine,
+    completionBar: optionalStringOption(options.completionBar)
+  }) as EditTaskInput;
+}
+
+function assignmentTarget(options: Record<string, unknown>): string | null {
+  const assign = options.assign ?? options.track;
+  return assign === undefined ? null : stringOption(assign, "assign");
+}
+
+function parseIdList(values: string[] | string): string[] {
+  const entries = Array.isArray(values) ? values : [values];
+  const ids = entries.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
+  if (ids.length === 0) {
+    throw new UnblockError("validation", "At least one dependency id is required.");
+  }
+  return [...new Set(ids)];
+}
+
+interface TaskImportPlan {
+  source: string;
+  tasks: PlannedTaskImport[];
+  dependencies: PlannedDependencyImport[];
+}
+
+interface PlannedTaskImport {
+  id: string;
+  title: string;
+  input: EditTaskInput;
+  assign: string | null;
+  tags: string[];
+}
+
+interface PlannedDependencyImport {
+  taskId: string;
+  dependsOnTaskId: string;
+}
+
+function parseTaskImportTree(file: string, content: string): TaskImportPlan {
+  const parsed = file.endsWith(".json") ? JSON.parse(content) as unknown : parseYaml(content) as unknown;
+  const root = Array.isArray(parsed) ? null : asRecord(parsed, "import file");
+  const rawTasks = Array.isArray(parsed) ? parsed : arrayField(root as Record<string, unknown>, "tasks");
+  const tasks: PlannedTaskImport[] = [];
+  const dependencies: PlannedDependencyImport[] = [];
+  const seenTaskIds = new Set<string>();
+
+  for (const rawTask of rawTasks) {
+    collectImportTask(rawTask, null, tasks, dependencies, seenTaskIds);
+  }
+  for (const rawEdge of optionalArrayField(root ?? {}, "dependencies")) {
+    const edge = asRecord(rawEdge, "dependencies[]");
+    const taskId = stringField(edge, ["task", "taskId"], "dependencies[].task");
+    for (const dependsOnTaskId of stringListField(edge, ["on", "dependsOn", "depends_on"], "dependencies[].on")) {
+      dependencies.push({ taskId, dependsOnTaskId });
+    }
+  }
+
+  return { source: file, tasks, dependencies: dedupeDependencyEdges(dependencies) };
+}
+
+function collectImportTask(
+  raw: unknown,
+  inheritedParentTaskId: string | null,
+  tasks: PlannedTaskImport[],
+  dependencies: PlannedDependencyImport[],
+  seenTaskIds: Set<string>
+): void {
+  const record = asRecord(raw, "tasks[]");
+  const id = stringField(record, ["id"], "task.id");
+  if (seenTaskIds.has(id)) {
+    throw new UnblockError("validation", `Duplicate task id in import tree: ${id}`);
+  }
+  seenTaskIds.add(id);
+  const title = stringField(record, ["title"], `task ${id}.title`);
+  const parentTaskId = record.parent === undefined && record.parentTaskId === undefined
+    ? inheritedParentTaskId
+    : nullableStringOption(record.parent ?? record.parentTaskId);
+  const input = defined({
+    parentTaskId,
+    title,
+    description: optionalStringOption(record.description),
+    lifecycle: optionalLifecycleOption(record.lifecycle),
+    priority: optionalPriorityValue(record.priority),
+    size: record.size === undefined ? undefined : taskSizeOption(record.size),
+    sourceDoc: optionalStringOption(record.source ?? record.sourceDoc),
+    sourceSection: optionalStringOption(record.section ?? record.sourceSection),
+    sourceLine: optionalIntegerValue(record.sourceLine ?? record.line),
+    completionBar: optionalStringOption(record.completionBar)
+  }) as EditTaskInput;
+  tasks.push({
+    id,
+    title,
+    input,
+    assign: record.assign === undefined && record.track === undefined ? null : stringOption(record.assign ?? record.track, `task ${id}.assign`),
+    tags: stringListField(record, ["tags"], `task ${id}.tags`, true)
+  });
+  for (const dependsOnTaskId of stringListField(record, ["dependsOn", "depends_on", "dependencies"], `task ${id}.dependsOn`, true)) {
+    dependencies.push({ taskId: id, dependsOnTaskId });
+  }
+  for (const child of optionalArrayField(record, "children")) {
+    collectImportTask(child, id, tasks, dependencies, seenTaskIds);
+  }
+}
+
+function dedupeDependencyEdges(edges: PlannedDependencyImport[]): PlannedDependencyImport[] {
+  const seen = new Set<string>();
+  return edges.filter((edge) => {
+    const key = `${edge.taskId}\0${edge.dependsOnTaskId}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new UnblockError("validation", `${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function arrayField(record: Record<string, unknown>, field: string): unknown[] {
+  const value = record[field];
+  if (!Array.isArray(value)) {
+    throw new UnblockError("validation", `${field} must be an array.`);
+  }
+  return value;
+}
+
+function optionalArrayField(record: Record<string, unknown>, field: string): unknown[] {
+  const value = record[field];
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new UnblockError("validation", `${field} must be an array.`);
+  }
+  return value;
+}
+
+function stringField(record: Record<string, unknown>, fields: string[], label: string): string {
+  for (const field of fields) {
+    if (record[field] !== undefined) {
+      return stringOption(record[field], label);
+    }
+  }
+  throw new UnblockError("validation", `${label} is required.`);
+}
+
+function stringListField(record: Record<string, unknown>, fields: string[], label: string, optional = false): string[] {
+  const value = fields.map((field) => record[field]).find((entry) => entry !== undefined);
+  if (value === undefined || value === null) {
+    return optional ? [] : (() => { throw new UnblockError("validation", `${label} is required.`); })();
+  }
+  if (Array.isArray(value)) {
+    const result = value.map((entry) => stringOption(entry, label)).filter(Boolean);
+    if (!optional && result.length === 0) {
+      throw new UnblockError("validation", `${label} must not be empty.`);
+    }
+    return result;
+  }
+  return parseIdList(stringOption(value, label));
+}
+
+function stringOption(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new UnblockError("validation", `${name} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+function optionalStringOption(value: unknown): string | undefined {
+  return value === undefined ? undefined : stringOption(value, "value");
+}
+
+function nullableStringOption(value: unknown): string | null {
+  if (value === null || value === "none") {
+    return null;
+  }
+  return stringOption(value, "value");
+}
+
+function parentOption(value: unknown): string | null {
+  return nullableStringOption(value);
+}
+
+function optionalLifecycleOption(value: unknown): Lifecycle | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const lifecycle = stringOption(value, "lifecycle");
+  if (lifecycle !== "open" && lifecycle !== "started" && lifecycle !== "finished") {
+    throw new UnblockError("validation", `Invalid lifecycle: ${lifecycle}`);
+  }
+  return lifecycle;
+}
+
+function taskSizeOption(value: unknown): TaskSize | null {
+  if (value === null || value === "none") {
+    return null;
+  }
+  const size = stringOption(value, "size").toUpperCase();
+  if (size !== "XS" && size !== "S" && size !== "M" && size !== "L" && size !== "XL") {
+    throw new UnblockError("validation", `Invalid size: ${size}`);
+  }
+  return size;
+}
+
+function optionalPriorityValue(value: unknown): Priority | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = typeof value === "number" ? value : parseInteger(stringOption(value, "priority"));
+  return prioritySchema.parse(parsed);
+}
+
+function optionalIntegerValue(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return typeof value === "number" ? value : parseInteger(stringOption(value, "integer"));
+}
+
+function matchesTrackReference(trackItem: { id: string; machine: string; actor: string }, actorOrId: string): boolean {
+  const raw = actorOrId.trim();
+  const actorRef = `${trackItem.machine}:${trackItem.actor}`;
+  return trackItem.id === raw
+    || trackItem.id === slugify(raw)
+    || trackItem.actor === raw
+    || actorRef === raw
+    || slugify(actorRef) === raw;
 }
 
 function parseInteger(value: string): number {

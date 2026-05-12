@@ -1,6 +1,7 @@
 import type {
   ActivityRepository,
   AppStore,
+  CommentRepository,
   DependencyRepository,
   MigrationRepository,
   ProjectRepository,
@@ -12,13 +13,14 @@ import type {
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Instruction, Migration, Project, QueueFeed, SavedView, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Comment, Dependency, Instruction, Migration, Project, QueueFeed, SavedView, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
 import { DEFAULT_PROJECT_ID, nowIso } from "./types.js";
 
 interface MemoryState {
   projects: Map<string, Project>;
   tasks: Map<string, Task>;
   dependencies: Map<string, Dependency>;
+  comments: Map<string, Comment>;
   tags: Map<string, Tag>;
   taskTags: Map<string, TaskTag>;
   tracks: Map<string, Track>;
@@ -35,6 +37,7 @@ export class MemoryStore implements AppStore {
   readonly tasks: TaskRepository;
   readonly projects: ProjectRepository;
   readonly dependencies: DependencyRepository;
+  readonly comments: CommentRepository;
   readonly tags: TagRepository;
   readonly tracks: TrackRepository;
   readonly instructions: InstructionRepository;
@@ -46,6 +49,7 @@ export class MemoryStore implements AppStore {
   constructor(seed?: Partial<{
     tasks: Task[];
     dependencies: Dependency[];
+    comments: Comment[];
     tags: Tag[];
     taskTags: TaskTag[];
     tracks: Track[];
@@ -73,6 +77,7 @@ export class MemoryStore implements AppStore {
       projects,
       tasks: new Map((seed?.tasks ?? []).map((task) => [taskKey(task.projectId, task.id), task])),
       dependencies: new Map((seed?.dependencies ?? []).map((dependency) => [dependencyKey(dependency.projectId, dependency.taskId, dependency.dependsOnTaskId), dependency])),
+      comments: new Map((seed?.comments ?? []).map((comment) => [scopedKey(comment.projectId, comment.id), comment])),
       tags: new Map((seed?.tags ?? []).map((tag) => [scopedKey(tag.projectId, tag.id), tag])),
       taskTags: new Map((seed?.taskTags ?? []).map((taskTag) => [taskTagKey(taskTag.projectId, taskTag.taskId, taskTag.tagId), taskTag])),
       tracks: new Map((seed?.tracks ?? []).map((track) => [scopedKey(track.projectId, track.id), track])),
@@ -86,6 +91,7 @@ export class MemoryStore implements AppStore {
     this.projects = new MemoryProjectRepository(this.state);
     this.tasks = new MemoryTaskRepository(this.state);
     this.dependencies = new MemoryDependencyRepository(this.state);
+    this.comments = new MemoryCommentRepository(this.state);
     this.tags = new MemoryTagRepository(this.state);
     this.tracks = new MemoryTrackRepository(this.state);
     this.instructions = new MemoryInstructionRepository(this.state);
@@ -168,6 +174,11 @@ class MemoryTaskRepository implements TaskRepository {
         this.state.assignments.delete(key);
       }
     }
+    for (const [key, comment] of this.state.comments) {
+      if (comment.projectId === projectId && comment.taskId === id) {
+        this.state.comments.delete(key);
+      }
+    }
   }
 }
 
@@ -203,6 +214,37 @@ class MemoryDependencyRepository implements DependencyRepository {
     for (const dependency of dependencies) {
       await this.add(dependency);
     }
+  }
+}
+
+class MemoryCommentRepository implements CommentRepository {
+  constructor(private readonly state: MemoryState) {}
+
+  async list(projectId?: string): Promise<Comment[]> {
+    return [...this.state.comments.values()]
+      .filter((comment) => !projectId || comment.projectId === projectId)
+      .map(cloneComment)
+      .sort(compareComments);
+  }
+
+  async listForTask(projectId: string, taskId: string): Promise<Comment[]> {
+    return [...this.state.comments.values()]
+      .filter((comment) => comment.projectId === projectId && comment.taskId === taskId)
+      .map(cloneComment)
+      .sort(compareComments);
+  }
+
+  async get(projectId: string, id: string): Promise<Comment | null> {
+    const comment = this.state.comments.get(scopedKey(projectId, id));
+    return comment ? cloneComment(comment) : null;
+  }
+
+  async create(comment: Comment): Promise<void> {
+    this.state.comments.set(scopedKey(comment.projectId, comment.id), cloneComment(comment));
+  }
+
+  async update(comment: Comment): Promise<void> {
+    this.state.comments.set(scopedKey(comment.projectId, comment.id), cloneComment(comment));
   }
 }
 
@@ -409,6 +451,10 @@ function cloneDependency(dependency: Dependency): Dependency {
   return { ...dependency };
 }
 
+function cloneComment(comment: Comment): Comment {
+  return { ...comment };
+}
+
 function cloneTag(tag: Tag): Tag {
   return { ...tag };
 }
@@ -450,6 +496,7 @@ function cloneState(state: MemoryState): MemoryState {
     tasks: new Map([...state.tasks].map(([key, value]) => [key, cloneTask(value)])),
     projects: new Map([...state.projects].map(([key, value]) => [key, cloneProject(value)])),
     dependencies: new Map([...state.dependencies].map(([key, value]) => [key, cloneDependency(value)])),
+    comments: new Map([...state.comments].map(([key, value]) => [key, cloneComment(value)])),
     tags: new Map([...state.tags].map(([key, value]) => [key, cloneTag(value)])),
     taskTags: new Map([...state.taskTags].map(([key, value]) => [key, cloneTaskTag(value)])),
     tracks: new Map([...state.tracks].map(([key, value]) => [key, cloneTrack(value)])),
@@ -466,6 +513,7 @@ function restoreState(target: MemoryState, source: MemoryState): void {
   target.tasks = source.tasks;
   target.projects = source.projects;
   target.dependencies = source.dependencies;
+  target.comments = source.comments;
   target.tags = source.tags;
   target.taskTags = source.taskTags;
   target.tracks = source.tracks;
@@ -475,4 +523,8 @@ function restoreState(target: MemoryState, source: MemoryState): void {
   target.assignments = source.assignments;
   target.activity = source.activity;
   target.migrations = source.migrations;
+}
+
+function compareComments(a: Comment, b: Comment): number {
+  return a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }

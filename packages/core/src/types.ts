@@ -18,7 +18,7 @@ export type Priority = z.infer<typeof prioritySchema>;
 
 export type ComputedStatus = "ready" | "blocked" | "started" | "finished" | "archived";
 export type RollupStatus = "leaf" | "complete" | "blocked-by-children";
-export type SubjectType = "project" | "task" | "tag" | "track" | "instruction" | "view" | "feed" | "import" | "export" | "system";
+export type SubjectType = "project" | "task" | "comment" | "tag" | "track" | "instruction" | "view" | "feed" | "import" | "export" | "system";
 export type OutputFormat = "table" | "json" | "markdown";
 export type TaskSort = "dependency" | "priority" | "depth" | "created" | "updated" | "id" | "title";
 
@@ -61,6 +61,18 @@ export interface Dependency {
   taskId: string;
   dependsOnTaskId: string;
   createdAt: string;
+}
+
+export interface Comment {
+  projectId: string;
+  id: string;
+  taskId: string;
+  machine: string;
+  actor: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
 }
 
 export interface Tag {
@@ -200,6 +212,10 @@ export interface TaskView extends Task {
   criticalChildPath: TaskPathSummary[];
   assignedTrack: AssignedTrackView | null;
   tags: Tag[];
+  commentCount: number;
+  recentCommentCount: number;
+  lastCommentAt: string | null;
+  commentAuthors: string[];
 }
 
 export interface DependencyExplanation {
@@ -255,6 +271,14 @@ export interface AddQueueFeedInput {
 export interface EditQueueFeedInput {
   name?: string;
   query?: string;
+}
+
+export interface AddCommentInput {
+  body: string;
+}
+
+export interface EditCommentInput {
+  body?: string;
 }
 
 export interface InstructionPreview {
@@ -406,6 +430,8 @@ export interface JsonImportResult {
   tracksUpdated: number;
   instructionsCreated: number;
   instructionsUpdated: number;
+  commentsCreated: number;
+  commentsUpdated: number;
   dependenciesAdded: number;
   taskTagsAdded: number;
   assignmentsAdded: number;
@@ -423,6 +449,7 @@ export interface JsonExport {
   instructions?: Instruction[];
   views?: SavedView[];
   feeds?: QueueFeed[];
+  comments?: Comment[];
   activity?: Activity[];
 }
 

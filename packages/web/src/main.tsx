@@ -15,6 +15,7 @@ import {
   GitBranch,
   ListChecks,
   ListTree,
+  MessageSquare,
   MoreHorizontal,
   Plus,
   RefreshCw,
@@ -99,6 +100,10 @@ interface TaskView {
   }>;
   assignedTrack: { trackId: string; machine: string; actor: string; name: string | null; position: string } | null;
   tags: TagRecord[];
+  commentCount: number;
+  recentCommentCount: number;
+  lastCommentAt: string | null;
+  commentAuthors: string[];
 }
 
 interface Explanation {
@@ -129,6 +134,18 @@ interface InstructionMatchRecord {
   instruction: InstructionRecord;
   task: TaskView;
   reasons: string[];
+}
+
+interface CommentRecord {
+  projectId: string;
+  id: string;
+  taskId: string;
+  machine: string;
+  actor: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
 }
 
 interface InstructionPreviewRecord {
@@ -306,6 +323,9 @@ function App() {
   const [dependencyMode, setDependencyMode] = useState<DependencyMode | null>(null);
   const [createDraft, setCreateDraft] = useState<CreateTaskDraft | null>(null);
   const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [comments, setComments] = useState<CommentRecord[]>([]);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentsFocusTarget, setCommentsFocusTarget] = useState<{ taskId: string; nonce: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
@@ -327,6 +347,7 @@ function App() {
   const selectedTasks = useMemo(() => activeSelectedIds.map((id) => tasks.find((task) => task.id === id)).filter((task): task is TaskView => Boolean(task)), [activeSelectedIds, tasks]);
   const activeProjects = useMemo(() => projects.filter((project) => !project.archivedAt), [projects]);
   const selectedProject = useMemo(() => projects.find((project) => project.id === uiState.projectId) ?? null, [projects, uiState.projectId]);
+  const commentsFocusNonce = selectedTask && commentsFocusTarget?.taskId === selectedTask.id ? commentsFocusTarget.nonce : 0;
 
   const updateUiState = useCallback((update: Partial<UiState> | ((current: UiState) => UiState)) => {
     setUiState((current) => typeof update === "function" ? update(current) : { ...current, ...update });
@@ -349,10 +370,16 @@ function App() {
   useEffect(() => {
     if (!selectedTask) {
       setExplanation(null);
+      setComments([]);
       return;
     }
     fetchJson<Explanation>(withProject(`/api/tasks/${selectedTask.id}/explain`, uiState.projectId)).then(setExplanation).catch((reason) => setError(String(reason)));
+    fetchJson<CommentRecord[]>(withProject(`/api/tasks/${selectedTask.id}/comments?limit=50`, uiState.projectId)).then(setComments).catch((reason) => setError(String(reason)));
   }, [selectedTask?.id, uiState.projectId, dataVersion]);
+
+  useEffect(() => {
+    setCommentDraft("");
+  }, [selectedTask?.id]);
 
   useEffect(() => {
     if (projects.length === 0) {
@@ -599,6 +626,11 @@ function App() {
     updateUiState({ mode: "tasks", selectedId: taskId });
   }
 
+  function openTaskComments(taskId: string) {
+    openTask(taskId);
+    setCommentsFocusTarget({ taskId, nonce: Date.now() });
+  }
+
   function startCreateTask(parentTaskId: string | null) {
     setDependencyMode(null);
     setCreateDraft({ parentTaskId, id: "", title: "", priority: "2" });
@@ -709,6 +741,25 @@ function App() {
         }
       });
       await refresh();
+    });
+  }
+
+  async function addComment(task: TaskView) {
+    const body = commentDraft.trim();
+    if (!body) {
+      return;
+    }
+    await runMutation(async () => {
+      await mutate(withProject(`/api/tasks/${task.id}/comments`, uiState.projectId), { method: "POST", body: { body } });
+      setCommentDraft("");
+      setComments(await fetchJson<CommentRecord[]>(withProject(`/api/tasks/${task.id}/comments?limit=50`, uiState.projectId)));
+    });
+  }
+
+  async function archiveComment(comment: CommentRecord) {
+    await runMutation(async () => {
+      await mutate(withProject(`/api/comments/${comment.id}/archive`, uiState.projectId), { method: "POST" });
+      setComments(await fetchJson<CommentRecord[]>(withProject(`/api/tasks/${comment.taskId}/comments?limit=50`, uiState.projectId)));
     });
   }
 
@@ -1074,6 +1125,7 @@ function App() {
                     onSelect={selectTask}
                     onSelectSubtree={selectSubtree}
                     onStartCreateSubtask={startCreateTask}
+                    onOpenComments={openTaskComments}
                     onCreateDraftChange={setCreateDraft}
                     onCreateDraftSubmit={() => void createTask()}
                     onCreateDraftCancel={() => setCreateDraft(null)}
@@ -1109,8 +1161,15 @@ function App() {
               <TaskDetails
                 task={selectedTask}
                 explanation={explanation}
+                comments={comments}
+                commentDraft={commentDraft}
+                commentsFocusNonce={commentsFocusNonce}
+                identityReady={identityReady}
                 tracks={tracks}
                 tags={tags}
+                onCommentDraftChange={setCommentDraft}
+                onAddComment={(task) => void addComment(task)}
+                onArchiveComment={(comment) => void archiveComment(comment)}
                 onAssign={(track, task) => void assignTask(track, task)}
                 onUnassign={(task) => void unassignTask(task)}
                 onAssignTag={(task, tagId) => void assignTag(task, tagId)}
@@ -1510,6 +1569,7 @@ function TaskNode({
   onSelect,
   onSelectSubtree,
   onStartCreateSubtask,
+  onOpenComments,
   onCreateDraftChange,
   onCreateDraftSubmit,
   onCreateDraftCancel,
@@ -1526,6 +1586,7 @@ function TaskNode({
   onSelect: (id: string, event: MouseEvent<HTMLDivElement>) => void;
   onSelectSubtree: (id: string) => void;
   onStartCreateSubtask: (parentTaskId: string) => void;
+  onOpenComments: (id: string) => void;
   onCreateDraftChange: Dispatch<SetStateAction<CreateTaskDraft | null>>;
   onCreateDraftSubmit: () => void;
   onCreateDraftCancel: () => void;
@@ -1570,6 +1631,19 @@ function TaskNode({
             {task.assignedTrack ? <span>{formatActorRef(task.assignedTrack)}</span> : null}
             {task.tags.length > 0 ? task.tags.slice(0, 2).map((tag) => <TagChip key={tag.id} tag={tag} />) : null}
             {task.tags.length > 2 ? <span>+{task.tags.length - 2} tags</span> : null}
+            {task.commentCount > 0 ? (
+              <button
+                className={task.recentCommentCount > 0 ? "comment-chip recent" : "comment-chip"}
+                title={`${task.commentCount} ${task.commentCount === 1 ? "comment" : "comments"}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenComments(task.id);
+                }}
+              >
+                <span>{task.commentCount}</span>
+                <MessageSquare size={13} />
+              </button>
+            ) : null}
           </div>
         </div>
         <div className="task-signals">
@@ -1613,6 +1687,7 @@ function TaskNode({
           onSelect={onSelect}
           onSelectSubtree={onSelectSubtree}
           onStartCreateSubtask={onStartCreateSubtask}
+          onOpenComments={onOpenComments}
           onCreateDraftChange={onCreateDraftChange}
           onCreateDraftSubmit={onCreateDraftSubmit}
           onCreateDraftCancel={onCreateDraftCancel}
@@ -1790,8 +1865,15 @@ function DependencyModePanel({
 function TaskDetails({
   task,
   explanation,
+  comments,
+  commentDraft,
+  commentsFocusNonce,
+  identityReady,
   tracks,
   tags,
+  onCommentDraftChange,
+  onAddComment,
+  onArchiveComment,
   onAssign,
   onUnassign,
   onAssignTag,
@@ -1804,8 +1886,15 @@ function TaskDetails({
 }: {
   task: TaskView | null;
   explanation: Explanation | null;
+  comments: CommentRecord[];
+  commentDraft: string;
+  commentsFocusNonce: number;
+  identityReady: boolean;
   tracks: TrackRecord[];
   tags: TagRecord[];
+  onCommentDraftChange: Dispatch<SetStateAction<string>>;
+  onAddComment: (task: TaskView) => void;
+  onArchiveComment: (comment: CommentRecord) => void;
   onAssign: (track: TrackRecord, task: TaskView) => void;
   onUnassign: (task: TaskView) => void;
   onAssignTag: (task: TaskView, tagId: string) => void;
@@ -1820,12 +1909,19 @@ function TaskDetails({
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
+  const commentsSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setIsEditing(false);
     setDraftTitle(task?.title ?? "");
     setDraftDescription(task?.description ?? "");
   }, [task?.id, task?.title, task?.description]);
+
+  useEffect(() => {
+    if (commentsFocusNonce > 0) {
+      commentsSectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  }, [commentsFocusNonce]);
 
   if (!task) {
     return <aside className="details-panel empty">No task selected</aside>;
@@ -1963,6 +2059,33 @@ function TaskDetails({
           </div>
         </section>
       ) : null}
+
+      <section className="detail-section comments-section" ref={commentsSectionRef}>
+        <h3>Comments</h3>
+        <div className="comment-list">
+          {comments.length > 0 ? comments.map((comment) => (
+            <article className="comment-card" key={comment.id}>
+              <div className="comment-meta">
+                <span>{formatActorRef(comment)}</span>
+                <span>{formatShortDateTime(comment.createdAt)}</span>
+                {comment.updatedAt !== comment.createdAt ? <span>edited</span> : null}
+                <button className="text-button" disabled={!identityReady} onClick={() => onArchiveComment(comment)}>Archive</button>
+              </div>
+              <MarkdownContent value={comment.body} />
+            </article>
+          )) : <p>No comments yet.</p>}
+        </div>
+        <div className="comment-form">
+          <textarea
+            value={commentDraft}
+            onChange={(event) => onCommentDraftChange(event.target.value)}
+            placeholder="Add a markdown comment..."
+          />
+          <button className="primary-button" disabled={!identityReady || !commentDraft.trim()} onClick={() => onAddComment(task)}>
+            <Plus size={15} /> Comment
+          </button>
+        </div>
+      </section>
 
       <section className="detail-section">
         <h3>Assignment</h3>
@@ -2702,7 +2825,11 @@ function TaskMini({ task, onClick }: { task: TaskView; onClick?: () => void }) {
   const content = (
     <>
       <StatusDot status={task.computedStatus} />
-      <div><strong>{task.id}</strong><span>{task.title}</span></div>
+      <div>
+        <strong>{task.id}</strong>
+        <span>{task.title}</span>
+        {task.commentCount > 0 ? <CommentChip task={task} /> : null}
+      </div>
     </>
   );
   return onClick ? (
@@ -2713,6 +2840,15 @@ function TaskMini({ task, onClick }: { task: TaskView; onClick?: () => void }) {
     <div className="task-mini">
       {content}
     </div>
+  );
+}
+
+function CommentChip({ task }: { task: TaskView }) {
+  return (
+    <span className={task.recentCommentCount > 0 ? "comment-chip recent" : "comment-chip"} title={`${task.commentCount} ${task.commentCount === 1 ? "comment" : "comments"}`}>
+      <span>{task.commentCount}</span>
+      <MessageSquare size={13} />
+    </span>
   );
 }
 
@@ -2970,6 +3106,10 @@ async function mutateResponse(url: string, options: { method: string; body?: unk
 
 function formatActorRef(identity: { machine: string; actor: string }): string {
   return `${identity.machine}:${identity.actor}`;
+}
+
+function formatShortDateTime(value: string): string {
+  return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 type UnblockWindow = Window & typeof globalThis & { __unblockRoot?: Root };

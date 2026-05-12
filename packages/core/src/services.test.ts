@@ -84,6 +84,38 @@ describe("unblock core services", () => {
     expect(tagged.map((task) => task.id)).toEqual(["WEB"]);
   });
 
+  it("keeps task comments flat, chronological, markdown-capable, and provenance-stamped", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "API", title: "API task" });
+    const first = await services.comments.add("API", { body: "**First** handoff note" });
+    const second = await services.comments.add("API", { body: "- second\n- note" });
+
+    let comments = await services.comments.list("API");
+    expect(new Set(comments.map((comment) => comment.id))).toEqual(new Set([first.id, second.id]));
+    expect(comments.map((comment) => comment.createdAt)).toEqual([...comments.map((comment) => comment.createdAt)].sort());
+    expect(comments.find((comment) => comment.id === first.id)).toMatchObject({
+      taskId: "API",
+      machine: "test-machine",
+      actor: "test-actor",
+      body: "**First** handoff note"
+    });
+
+    await services.comments.edit(first.id, { body: "Updated **note**" });
+    await services.comments.archive(second.id);
+    comments = await services.comments.list("API");
+    expect(comments.map((comment) => comment.body)).toEqual(["Updated **note**"]);
+    expect((await services.comments.list("API", { includeArchived: true })).map((comment) => comment.id)).toEqual(expect.arrayContaining([first.id, second.id]));
+
+    await services.comments.restore(second.id);
+    expect((await services.comments.list("API")).map((comment) => comment.id)).toEqual(expect.arrayContaining([first.id, second.id]));
+
+    expect((await services.query.list({ where: "comments > 0" })).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.query.list({ where: "commented by test-machine:test-actor" })).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.query.list({ where: "commented since now - 1d" })).map((task) => task.id)).toEqual(["API"]);
+  });
+
   it("rejects parent cycles", async () => {
     const store = createMemoryStore();
     const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
@@ -218,6 +250,20 @@ describe("unblock core services", () => {
     expect(explanation.assignable).toBe(true);
     expect(explanation.task.blocked).toBe(true);
     expect(explanation.reason).toBe("Task can be assigned, but 1 dependency is unfinished.");
+  });
+
+  it("resolves displayed actor queue ids everywhere actor-or-track refs are accepted", async () => {
+    const store = createMemoryStore();
+    const services = createServices(store, { machine: "bw-mbp", actor: "tester" });
+
+    await services.tasks.add({ id: "A", title: "Assignable task" });
+    const track = await services.tracks.add({ actor: "codex-a" });
+
+    expect(track.id).toBe("bw-mbp-codex-a");
+    await expect(services.tracks.assign("bw-mbp-codex-a", "A")).resolves.toMatchObject({
+      taskId: "A",
+      trackId: "bw-mbp-codex-a"
+    });
   });
 
   it("matches instructions dynamically across metadata, hierarchy, and dependency graph predicates", async () => {

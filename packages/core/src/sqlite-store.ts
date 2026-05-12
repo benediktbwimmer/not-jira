@@ -5,6 +5,7 @@ import { sqliteMigrations } from "./migrations.js";
 import type {
   ActivityRepository,
   AppStore,
+  CommentRepository,
   DependencyRepository,
   MigrationRepository,
   ProjectRepository,
@@ -16,7 +17,7 @@ import type {
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Dependency, Instruction, Lifecycle, Migration, Priority, Project, QueueFeed, SavedView, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Comment, Dependency, Instruction, Lifecycle, Migration, Priority, Project, QueueFeed, SavedView, Tag, Task, TaskSize, TaskTag, Track, TrackAssignment } from "./types.js";
 import { defaultUnblockDbPath, nowIso } from "./types.js";
 
 type SqliteDatabase = Database.Database;
@@ -54,6 +55,18 @@ interface DependencyRow {
   task_id: string;
   depends_on_task_id: string;
   created_at: string;
+}
+
+interface CommentRow {
+  project_id: string;
+  id: string;
+  task_id: string;
+  machine: string;
+  actor: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
 }
 
 interface TagRow {
@@ -158,6 +171,7 @@ export class SqliteStore implements AppStore {
   readonly projects: ProjectRepository;
   readonly tasks: TaskRepository;
   readonly dependencies: DependencyRepository;
+  readonly comments: CommentRepository;
   readonly tags: TagRepository;
   readonly tracks: TrackRepository;
   readonly instructions: InstructionRepository;
@@ -176,6 +190,7 @@ export class SqliteStore implements AppStore {
     this.projects = new SqliteProjectRepository(this.db);
     this.tasks = new SqliteTaskRepository(this.db);
     this.dependencies = new SqliteDependencyRepository(this.db);
+    this.comments = new SqliteCommentRepository(this.db);
     this.tags = new SqliteTagRepository(this.db);
     this.tracks = new SqliteTrackRepository(this.db);
     this.instructions = new SqliteInstructionRepository(this.db);
@@ -330,6 +345,41 @@ class SqliteDependencyRepository implements DependencyRepository {
     for (const dependency of dependencies) {
       insert.run(dependency);
     }
+  }
+}
+
+class SqliteCommentRepository implements CommentRepository {
+  constructor(private readonly db: SqliteDatabase) {}
+
+  async list(projectId?: string): Promise<Comment[]> {
+    const rows = projectId
+      ? this.db.prepare("select * from comments where project_id = ? order by created_at asc, id asc").all(projectId)
+      : this.db.prepare("select * from comments order by project_id, created_at asc, id asc").all();
+    return rows.map((row) => commentFromRow(row as CommentRow));
+  }
+
+  async listForTask(projectId: string, taskId: string): Promise<Comment[]> {
+    return this.db.prepare("select * from comments where project_id = ? and task_id = ? order by created_at asc, id asc").all(projectId, taskId).map((row) => commentFromRow(row as CommentRow));
+  }
+
+  async get(projectId: string, id: string): Promise<Comment | null> {
+    const row = this.db.prepare("select * from comments where project_id = ? and id = ?").get(projectId, id) as CommentRow | undefined;
+    return row ? commentFromRow(row) : null;
+  }
+
+  async create(comment: Comment): Promise<void> {
+    this.db.prepare(`
+      insert into comments (project_id, id, task_id, machine, actor, body, created_at, updated_at, archived_at)
+      values (@projectId, @id, @taskId, @machine, @actor, @body, @createdAt, @updatedAt, @archivedAt)
+    `).run(comment);
+  }
+
+  async update(comment: Comment): Promise<void> {
+    this.db.prepare(`
+      update comments
+      set task_id = @taskId, machine = @machine, actor = @actor, body = @body, updated_at = @updatedAt, archived_at = @archivedAt
+      where project_id = @projectId and id = @id
+    `).run(comment);
   }
 }
 
@@ -621,6 +671,20 @@ function dependencyFromRow(row: DependencyRow): Dependency {
     taskId: row.task_id,
     dependsOnTaskId: row.depends_on_task_id,
     createdAt: row.created_at
+  };
+}
+
+function commentFromRow(row: CommentRow): Comment {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    taskId: row.task_id,
+    machine: row.machine,
+    actor: row.actor,
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    archivedAt: row.archived_at
   };
 }
 

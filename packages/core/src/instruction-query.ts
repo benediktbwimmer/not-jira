@@ -15,13 +15,14 @@ type QueryNode =
   | { type: "not"; node: QueryNode }
   | FieldPredicate
   | TimePredicate
+  | CommentPredicate
   | GraphPredicate
   | HierarchyPredicate;
 
 const COMPARE_OPERATORS = ["=", "!=", ">", ">=", "<", "<="] as const;
 const FIELD_OPERATORS = [...COMPARE_OPERATORS, "in"] as const;
 const BOOLEAN_OPERATORS = ["and", "or", "not"] as const;
-const SIMPLE_FIELDS = ["id", "tag", "assigned", "machine", "actor", "status", "lifecycle", "parent", "priority"] as const;
+const SIMPLE_FIELDS = ["id", "tag", "assigned", "machine", "actor", "status", "lifecycle", "parent", "priority", "comments"] as const;
 const TIME_FIELDS = ["created", "updated", "started", "finished", "archived"] as const;
 const PHRASE_FIELDS = ["id prefix", "source doc", "source section"] as const;
 const FIELD_NAMES = [...SIMPLE_FIELDS, ...TIME_FIELDS, ...PHRASE_FIELDS] as const;
@@ -34,6 +35,9 @@ const INSTRUCTION_QUERY_EXAMPLES = [
   "descendant of PRISM-RUNTIME",
   "depends on PRISM-MIGRATIONS depth <= 2",
   "unblocks > 5 and priority >= 3",
+  "comments > 0",
+  "commented since now - 1d",
+  "commented by local:codex-b",
   "started is empty",
   "updated >= now - 2d",
   "created = 2026-05-10"
@@ -69,6 +73,12 @@ interface TimePredicate {
   field: TimeFieldName;
   op: CompareOp | "is empty" | "is not empty";
   value?: TimeExpression;
+}
+
+interface CommentPredicate {
+  type: "comment";
+  relation: "by" | "since";
+  value: string | TimeExpression;
 }
 
 type TimeFieldName = typeof TIME_FIELDS[number];
@@ -136,7 +146,7 @@ export function instructionQueryGrammar(): InstructionQueryGrammar {
       {
         name: "Field comparison",
         forms: ["FIELD = VALUE", "FIELD != VALUE", "FIELD > VALUE", "FIELD >= VALUE", "FIELD < VALUE", "FIELD <= VALUE"],
-        description: "Compare one task field against one value. Numeric ordering is meaningful for priority; other fields use equality or inequality."
+        description: "Compare one task field against one value. Numeric ordering is meaningful for priority and comments; other fields use equality or inequality."
       },
       {
         name: "Field membership",
@@ -169,6 +179,16 @@ export function instructionQueryGrammar(): InstructionQueryGrammar {
         description: "Match by the number of reachable dependency or unblock tasks."
       },
       {
+        name: "Comment count",
+        forms: ["comments > NUMBER", "comments = NUMBER", "comments <= NUMBER"],
+        description: "Match by active, non-archived task comment count."
+      },
+      {
+        name: "Comment activity",
+        forms: ["commented by MACHINE:ACTOR", "commented since today", "commented since now - 1d", "commented since 2026-05-10"],
+        description: "Match tasks with active comments by an actor or at/after a time."
+      },
+      {
         name: "Hierarchy",
         forms: ["descendant of TASK"],
         description: "Match tasks below TASK in the parent-child hierarchy."
@@ -179,6 +199,9 @@ export function instructionQueryGrammar(): InstructionQueryGrammar {
       "Boolean precedence is: not, then and, then or.",
       "Field comparisons are case-insensitive except numeric priority comparisons.",
       "Time fields are: created, updated, started, finished, archived.",
+      "The comments field is a numeric active comment count.",
+      "commented by uses machine:actor values.",
+      "commented since accepts the same time values as time comparisons.",
       "Date-only equality matches the whole local day.",
       "Nullable time fields only match comparisons when present.",
       "Relative time units are m, h, d, and w.",
@@ -302,6 +325,15 @@ class Parser {
     }
     if (this.matchWord("unblocks")) {
       return this.parseGraph("unblocks");
+    }
+    if (this.matchWord("commented")) {
+      if (this.matchWord("by")) {
+        return { type: "comment", relation: "by", value: this.parseValue() };
+      }
+      if (this.matchWord("since")) {
+        return { type: "comment", relation: "since", value: this.parseTimeExpression() };
+      }
+      this.fail("Expected commented by or commented since.");
     }
     const field = this.parseField();
     if (field === "assigned") {
@@ -512,6 +544,7 @@ function evaluate(node: QueryNode, context: EvalContext): EvalResult {
   }
   if (node.type === "field") return evaluateField(node, context.task);
   if (node.type === "time") return evaluateTime(node, context);
+  if (node.type === "comment") return evaluateComment(node, context);
   if (node.type === "graph") return evaluateGraph(node, context);
   return evaluateHierarchy(node, context);
 }
@@ -539,6 +572,21 @@ function evaluateTime(predicate: TimePredicate, context: EvalContext): EvalResul
   const right = resolveTimeExpression(predicate.value, context.now);
   const matched = compareTime(left, predicate.op, right);
   return matched ? { matched: true, reasons: [`${predicate.field} ${predicate.op} ${formatTimeExpression(predicate.value)}`] } : { matched: false, reasons: [] };
+}
+
+function evaluateComment(predicate: CommentPredicate, context: EvalContext): EvalResult {
+  if (predicate.relation === "by") {
+    const expected = String(predicate.value);
+    const matched = context.task.commentAuthors.some((author) => author.toLowerCase() === expected.toLowerCase());
+    return matched ? { matched: true, reasons: [`commented by ${expected}`] } : { matched: false, reasons: [] };
+  }
+  const lastCommentAt = context.task.lastCommentAt;
+  if (!lastCommentAt) {
+    return { matched: false, reasons: [] };
+  }
+  const right = resolveTimeExpression(predicate.value as TimeExpression, context.now);
+  const matched = compareTime(parseTaskTime(lastCommentAt, "updated"), ">=", right);
+  return matched ? { matched: true, reasons: [`commented since ${formatTimeExpression(predicate.value as TimeExpression)}`] } : { matched: false, reasons: [] };
 }
 
 function timeFieldValue(field: TimeFieldName, task: TaskView): string | null {
@@ -582,6 +630,7 @@ function fieldValues(field: FieldName, task: TaskView): string[] {
   if (field === "parent") return task.parentTaskId ? [task.parentTaskId] : ["root"];
   if (field === "source doc") return task.sourceDoc ? [task.sourceDoc] : [];
   if (field === "source section") return task.sourceSection ? [task.sourceSection] : [];
+  if (field === "comments") return [String(task.commentCount)];
   return [String(task.priority), `P${task.priority}`];
 }
 
@@ -589,7 +638,7 @@ function compareAny(values: string[], op: CompareOp, expected: string, field: Fi
   if (field === "id prefix") {
     return values.some((value) => op === "=" ? value.startsWith(expected) : op === "!=" ? !value.startsWith(expected) : false);
   }
-  if (field === "priority") {
+  if (field === "priority" || field === "comments") {
     const expectedPriority = parsePriority(expected);
     return values.some((value) => compareNumber(parsePriority(value), op, expectedPriority));
   }

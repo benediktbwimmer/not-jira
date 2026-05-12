@@ -1,5 +1,6 @@
 import type {
   Activity,
+  Comment,
   Dependency,
   Migration,
   Project,
@@ -35,6 +36,14 @@ export interface DependencyRepository {
   add(dependency: Dependency): Promise<void>;
   remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void>;
   replaceForTask(projectId: string, taskId: string, dependencies: Dependency[]): Promise<void>;
+}
+
+export interface CommentRepository {
+  list(projectId?: string): Promise<Comment[]>;
+  listForTask(projectId: string, taskId: string): Promise<Comment[]>;
+  get(projectId: string, id: string): Promise<Comment | null>;
+  create(comment: Comment): Promise<void>;
+  update(comment: Comment): Promise<void>;
 }
 
 export interface TagRepository {
@@ -95,6 +104,7 @@ export interface RepositorySet {
   projects: ProjectRepository;
   tasks: TaskRepository;
   dependencies: DependencyRepository;
+  comments: CommentRepository;
   tags: TagRepository;
   tracks: TrackRepository;
   instructions: InstructionRepository;

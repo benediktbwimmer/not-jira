@@ -155,6 +155,15 @@ export function createApp(options: ServerOptions = {}) {
     return c.json(explanation);
   });
 
+  app.get("/api/tasks/:id/comments", async (c) => c.json(await (await scopedServices(c)).comments.list(c.req.param("id"), {
+    includeArchived: c.req.query("includeArchived") === "true",
+    limit: parseOptionalInteger(c.req.query("limit"))
+  })));
+  app.post("/api/tasks/:id/comments", async (c) => c.json(await (await scopedServices(c)).comments.add(c.req.param("id"), await c.req.json()), 201));
+  app.patch("/api/comments/:id", async (c) => c.json(await (await scopedServices(c)).comments.edit(c.req.param("id"), await c.req.json())));
+  app.post("/api/comments/:id/archive", async (c) => c.json(await (await scopedServices(c)).comments.archive(c.req.param("id"))));
+  app.post("/api/comments/:id/restore", async (c) => c.json(await (await scopedServices(c)).comments.restore(c.req.param("id"))));
+
   app.put("/api/tasks/:id/dependencies", async (c) => {
     const body = await c.req.json<{ dependencyIds: string[] }>();
     return c.json(await (await scopedServices(c)).dependencies.set(c.req.param("id"), body.dependencyIds ?? []));
