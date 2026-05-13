@@ -194,9 +194,10 @@ describe("PrismStore", () => {
 
   it("lowers matcher queries to Prism fragment source and executes the fragment by id", async () => {
     const fragment = lowerMatcherQueryToPrismFragment("tag = backend and depends on API depth <= 2");
-    expect(fragment.source).toContain(".from(taskMatcherReadModel)");
+    expect(fragment.source).toContain(".from(taskRows)");
     expect(fragment.source).toContain(".leftJoin(taskLabelRows");
     expect(fragment.source).toContain(".leftJoin(taskDependencyClosure");
+    expect(fragment.usesDynamicTime).toBe(false);
 
     const client = new RecordingClient();
     client.surfaces.set(fragment.fragmentId, [{ project_id: "P", task_id: "WORK" }]);

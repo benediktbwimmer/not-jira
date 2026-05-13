@@ -22,6 +22,7 @@ export interface MatcherFragmentLowering {
   selectorHash: string;
   sourceHash: string;
   source: string;
+  usesDynamicTime: boolean;
   input(now?: Date, projectId?: string): Record<string, string>;
 }
 
@@ -151,6 +152,7 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
     selectorHash,
     sourceHash,
     source,
+    usesDynamicTime: context.times.length > 0,
     input(now = new Date(), projectId = "") {
       return {
         project_id: projectId,

@@ -230,6 +230,7 @@ export class PrismStore implements AppStore {
 
   private readonly transactionOperations = new AsyncLocalStorage<PrismMutation[]>();
   private readonly matcherFragments = new Map<string, Promise<AdmittedMatcherFragment>>();
+  private readonly matcherResultCache = new Map<string, Promise<string[]>>();
 
   constructor(private readonly options: {
     client: PrismRuntimeClient;
@@ -334,6 +335,21 @@ export class PrismStore implements AppStore {
     return admitted;
   }
 
+  async matchTaskIds(projectId: string, query: string, filters: Record<string, unknown> = {}): Promise<string[]> {
+    const fragment = await this.ensureMatcherFragment(query);
+    const input = fragment.lowering.input(new Date(), projectId);
+    if (fragment.lowering.usesDynamicTime) {
+      return await this.fetchMatcherTaskIds(fragment, input);
+    }
+    const cacheKey = `${fragment.fragmentId}:${fragment.fragmentHash}:${hashJson(input)}:${hashJson(filters)}`;
+    let pending = this.matcherResultCache.get(cacheKey);
+    if (!pending) {
+      pending = this.fetchMatcherTaskIds(fragment, input);
+      this.matcherResultCache.set(cacheKey, pending);
+    }
+    return await pending;
+  }
+
   projectId(): string {
     return this.options.projectId;
   }
@@ -366,6 +382,7 @@ export class PrismStore implements AppStore {
 
   private async flush(operations: PrismMutation[], idempotencyKey: string): Promise<void> {
     if (operations.length === 0) return;
+    this.matcherResultCache.clear();
     await this.options.client.submitSemanticCommit({
       projectId: this.options.projectId,
       shardId: this.options.shardId,
@@ -374,6 +391,12 @@ export class PrismStore implements AppStore {
       idempotencyKey,
       operations: operations.map(toSemanticOperation),
     });
+    this.matcherResultCache.clear();
+  }
+
+  private async fetchMatcherTaskIds(fragment: AdmittedMatcherFragment, input: Record<string, unknown>): Promise<string[]> {
+    const rows = await this.query<{ task_id: string }>(fragment.fragmentId, input);
+    return [...new Set(rows.map((row) => row.task_id))].sort();
   }
 
   private async compileAndStoreMatcherFragment(fragment: MatcherFragmentLowering): Promise<AdmittedMatcherFragment> {
@@ -692,6 +715,10 @@ class PrismDependencyRepository implements DependencyRepository {
     await this.store.record([dependencyLink(dependency)]);
   }
 
+  async addMany(dependencies: Dependency[]): Promise<void> {
+    await this.store.record(dependencies.map(dependencyLink));
+  }
+
   async remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void> {
     await this.store.record([{
       kind: "relation.unlink",
@@ -776,6 +803,10 @@ class PrismTagRepository implements TagRepository {
   async addTaskTag(taskTag: TaskTag): Promise<void> {
     const tag = await this.get(taskTag.projectId, taskTag.tagId);
     await this.store.record([taskLabelSet(taskTag, tag)]);
+  }
+
+  async addTaskTags(assignments: Array<{ taskTag: TaskTag; tag?: Tag | null }>): Promise<void> {
+    await this.store.record(assignments.map(({ taskTag, tag }) => taskLabelSet(taskTag, tag ?? null)));
   }
 
   async removeTaskTag(_projectId: string, taskId: string, tagId: string): Promise<void> {
@@ -974,10 +1005,8 @@ class PrismActivityRepository implements ActivityRepository {
 class PrismMatcherQueryRepository implements MatcherQueryRepository {
   constructor(private readonly store: PrismStore) {}
 
-  async matchTaskIds(projectId: string, query: string): Promise<string[]> {
-    const fragment = await this.store.ensureMatcherFragment(query);
-    const rows = await this.store.query<{ task_id: string }>(fragment.fragmentId, fragment.lowering.input(new Date(), projectId));
-    return [...new Set(rows.map((row) => row.task_id))].sort();
+  async matchTaskIds(projectId: string, query: string, filters: Record<string, unknown> = {}): Promise<string[]> {
+    return await this.store.matchTaskIds(projectId, query, filters);
   }
 }
 

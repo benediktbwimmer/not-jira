@@ -219,19 +219,19 @@ async function main(): Promise<void> {
     phases.push(await phase("unblock.matcher.query", async () => {
       const query = workload.matcherQuery;
       await waitFor("matcher query matches", options, async () => {
-        const matches = await services.query.match(query, options.tasks, { includeArchived: true, includeFinished: true });
+        const matches = await services.query.matchIds(query, options.tasks, { includeArchived: true, includeFinished: true });
         matcherMatches = matches.length;
         return matcherMatches > 0;
       });
       for (let index = 1; index < options.queries; index += 1) {
-        matcherMatches += (await services.query.match(query, options.tasks, { includeArchived: true, includeFinished: true })).length;
+        matcherMatches += (await services.query.matchIds(query, options.tasks, { includeArchived: true, includeFinished: true })).length;
       }
     }, options.queries));
 
     let instructionMatches = 0;
     phases.push(await phase("unblock.instructions.match", async () => {
       await waitFor("instruction matches", options, async () => {
-        const matches = await services.query.matchingInstructions();
+        const matches = await services.query.matchingInstructionIds();
         instructionMatches = matches.length;
         return instructionMatches > 0;
       });

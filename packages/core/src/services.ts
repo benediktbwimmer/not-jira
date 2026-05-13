@@ -612,8 +612,12 @@ export class DependencyService {
         }
       }
       validateDependencyGraph(tasks, [...existing, ...candidates]);
-      for (const dependency of candidates) {
-        await repos.dependencies.add(dependency);
+      if (repos.dependencies.addMany) {
+        await repos.dependencies.addMany(candidates);
+      } else {
+        for (const dependency of candidates) {
+          await repos.dependencies.add(dependency);
+        }
       }
       if (candidates.length > 0) {
         await repos.activity.append(this.activity.make(this.projectId, "dependency.batch_added", "project", this.projectId, `Added ${candidates.length} dependencies`, { count: candidates.length }));
@@ -847,6 +851,7 @@ export class TagService {
       const tagsById = new Map(tags.map((tag) => [tag.id, tag]));
       const tagsByName = new Map(tags.map((tag) => [tag.name, tag]));
       const assigned = new Set<string>();
+      const taskTags: Array<{ taskTag: TaskTag; tag: Tag }> = [];
       let assignmentCount = 0;
 
       for (const input of normalized) {
@@ -862,10 +867,20 @@ export class TagService {
           if (assigned.has(key)) continue;
           assigned.add(key);
           assignmentCount += 1;
-          await repos.tags.addTaskTag({ projectId: this.projectId, taskId: input.taskId, tagId: tag.id, createdAt });
+          taskTags.push({
+            taskTag: { projectId: this.projectId, taskId: input.taskId, tagId: tag.id, createdAt },
+            tag,
+          });
         }
       }
 
+      if (repos.tags.addTaskTags) {
+        await repos.tags.addTaskTags(taskTags);
+      } else {
+        for (const { taskTag } of taskTags) {
+          await repos.tags.addTaskTag(taskTag);
+        }
+      }
       await repos.activity.append(this.activity.make(this.projectId, "tag.batch_assigned", "project", this.projectId, `Assigned ${assignmentCount} task tags`, { count: assignmentCount }));
     });
   }
@@ -1525,6 +1540,14 @@ export class QueryService {
     return (await this.list({ ...filters, where: query })).slice(0, normalizedLimit);
   }
 
+  async matchIds(query: string, limit: number, filters: Omit<TaskListFilters, "where"> = {}): Promise<string[]> {
+    const normalizedLimit = normalizeQueryLimit(limit);
+    if (this.store.matcher) {
+      return (await this.store.matcher.matchTaskIds(this.projectId, query, filters)).slice(0, normalizedLimit);
+    }
+    return (await this.match(query, normalizedLimit, filters)).map((task) => task.id);
+  }
+
   async explain(idInput: string): Promise<DependencyExplanation> {
     const id = normalizeId(idInput);
     const views = await this.list({ includeFinished: true, includeArchived: true });
@@ -1570,11 +1593,8 @@ export class QueryService {
     if (errors.length > 0) {
       return { ok: false, query, errors, matches: [] };
     }
-    const [tasks, dependencies] = await Promise.all([
-      this.list({ includeArchived: true, includeFinished: true }),
-      this.store.dependencies.list(this.projectId)
-    ]);
     if (this.store.matcher) {
+      const tasks = await this.list({ includeArchived: true, includeFinished: true });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
       const taskIds = await this.store.matcher.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true });
       return {
@@ -1601,6 +1621,10 @@ export class QueryService {
           }))
       };
     }
+    const [tasks, dependencies] = await Promise.all([
+      this.list({ includeArchived: true, includeFinished: true }),
+      this.store.dependencies.list(this.projectId)
+    ]);
     return {
       ok: true,
       query,
@@ -1624,14 +1648,11 @@ export class QueryService {
   }
 
   async matchingInstructions(): Promise<InstructionMatch[]> {
-    const [instructions, tasks, dependencies] = await Promise.all([
-      this.store.instructions.list(this.projectId),
-      this.list({ includeArchived: true, includeFinished: true }),
-      this.store.dependencies.list(this.projectId)
-    ]);
+    const instructions = await this.store.instructions.list(this.projectId);
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     const matches: InstructionMatch[] = [];
     if (this.store.matcher) {
+      const tasks = await this.list({ includeArchived: true, includeFinished: true });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
       for (const instruction of enabled) {
         for (const taskId of await this.store.matcher.matchTaskIds(this.projectId, instruction.query, { includeArchived: true, includeFinished: true })) {
@@ -1641,12 +1662,34 @@ export class QueryService {
       }
       return matches.sort((a, b) => a.instruction.name.localeCompare(b.instruction.name) || a.task.id.localeCompare(b.task.id));
     }
+    const [tasks, dependencies] = await Promise.all([
+      this.list({ includeArchived: true, includeFinished: true }),
+      this.store.dependencies.list(this.projectId)
+    ]);
     for (const instruction of enabled) {
       for (const match of matchMatcherQuery(instruction.query, tasks, dependencies)) {
         matches.push({ instruction, task: match.task, reasons: match.reasons });
       }
     }
     return matches.sort((a, b) => a.instruction.name.localeCompare(b.instruction.name) || a.task.id.localeCompare(b.task.id));
+  }
+
+  async matchingInstructionIds(): Promise<Array<{ instructionId: string; taskId: string }>> {
+    const instructions = await this.store.instructions.list(this.projectId);
+    const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
+    if (this.store.matcher) {
+      const matches: Array<{ instructionId: string; taskId: string }> = [];
+      for (const instruction of enabled) {
+        for (const taskId of await this.store.matcher.matchTaskIds(this.projectId, instruction.query, { includeArchived: true, includeFinished: true })) {
+          matches.push({ instructionId: instruction.id, taskId });
+        }
+      }
+      return matches.sort((a, b) => a.instructionId.localeCompare(b.instructionId) || a.taskId.localeCompare(b.taskId));
+    }
+    return (await this.matchingInstructions()).map((match) => ({
+      instructionId: match.instruction.id,
+      taskId: match.task.id,
+    }));
   }
 
   async sourceCoverage(): Promise<SourceSectionCoverage[]> {

@@ -35,6 +35,7 @@ export interface DependencyRepository {
   listForTask(projectId: string, taskId: string): Promise<Dependency[]>;
   listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]>;
   add(dependency: Dependency): Promise<void>;
+  addMany?(dependencies: Dependency[]): Promise<void>;
   remove(projectId: string, taskId: string, dependsOnTaskId: string): Promise<void>;
   replaceForTask(projectId: string, taskId: string, dependencies: Dependency[]): Promise<void>;
 }
@@ -55,6 +56,7 @@ export interface TagRepository {
   update(tag: Tag): Promise<void>;
   listTaskTags(projectId?: string): Promise<TaskTag[]>;
   addTaskTag(taskTag: TaskTag): Promise<void>;
+  addTaskTags?(assignments: Array<{ taskTag: TaskTag; tag?: Tag | null }>): Promise<void>;
   removeTaskTag(projectId: string, taskId: string, tagId: string): Promise<void>;
 }
 
