@@ -1708,10 +1708,13 @@ export class QueryService {
     if (this.store.matcher) {
       const tasks = await this.list({ includeArchived: true, includeFinished: true });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
+      const taskIdsByQuery = await this.matchTaskIdsByInstructionQuery(enabled);
       for (const instruction of enabled) {
-        for (const taskId of await this.store.matcher.matchTaskIds(this.projectId, instruction.query, { includeArchived: true, includeFinished: true })) {
+        for (const taskId of taskIdsByQuery.get(instruction.query) ?? []) {
           const task = taskById.get(taskId);
-          if (task) matches.push({ instruction, task, reasons: ["matched by Prism selector fragment"] });
+          if (task) {
+            matches.push({ instruction, task, reasons: ["matched by Prism selector fragment"] });
+          }
         }
       }
       return matches.sort((a, b) => a.instruction.name.localeCompare(b.instruction.name) || a.task.id.localeCompare(b.task.id));
@@ -1733,8 +1736,9 @@ export class QueryService {
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     if (this.store.matcher) {
       const matches: Array<{ instructionId: string; taskId: string }> = [];
+      const taskIdsByQuery = await this.matchTaskIdsByInstructionQuery(enabled);
       for (const instruction of enabled) {
-        for (const taskId of await this.store.matcher.matchTaskIds(this.projectId, instruction.query, { includeArchived: true, includeFinished: true })) {
+        for (const taskId of taskIdsByQuery.get(instruction.query) ?? []) {
           matches.push({ instructionId: instruction.id, taskId });
         }
       }
@@ -1744,6 +1748,16 @@ export class QueryService {
       instructionId: match.instruction.id,
       taskId: match.task.id,
     }));
+  }
+
+  private async matchTaskIdsByInstructionQuery(instructions: Instruction[]): Promise<Map<string, string[]>> {
+    if (!this.store.matcher) return new Map();
+    const queries = [...new Set(instructions.map((instruction) => instruction.query))];
+    const entries = await Promise.all(queries.map(async (query) => [
+      query,
+      await this.store.matcher!.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true })
+    ] as const));
+    return new Map(entries);
   }
 
   async sourceCoverage(): Promise<SourceSectionCoverage[]> {

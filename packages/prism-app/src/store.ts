@@ -49,6 +49,7 @@ export interface PrismStoreOptions {
   client?: PrismRuntimeClient;
   protoPath?: string;
   offline?: boolean;
+  readMode?: "query" | "materialized";
   fragmentCompiler?: MatcherFragmentCompiler;
   matcherFragmentLoweringOptions?: MatcherFragmentLoweringOptions;
 }
@@ -169,6 +170,69 @@ export interface PrismTagAssignment {
   origin: string;
 }
 
+const TASK_DERIVED_SURFACES = [
+  "taskRows",
+  "taskReadModel",
+  "taskCommentMatcherModel",
+  "taskAssignmentMatcherModel",
+  "taskMatcherReadModel",
+  "readyTasks",
+  "taskStatus",
+  "hierarchyStatus",
+  "unfinishedDirectDependencySummary",
+  "unfinishedDescendantSummary",
+] as const;
+
+const DEPENDENCY_DERIVED_SURFACES = [
+  "taskDependencyRows",
+  "directDependencySummary",
+  "directDependentSummary",
+  "unfinishedDirectDependencySummary",
+  "taskDependencySummary",
+  "taskUnblockSummary",
+  "taskStatus",
+  "taskReadModel",
+  "taskMatcherReadModel",
+  "readyTasks",
+] as const;
+
+const HIERARCHY_DERIVED_SURFACES = [
+  "taskHierarchyRows",
+  "childSummary",
+  "descendantSummary",
+  "unfinishedDescendantSummary",
+  "parentSummary",
+  "hierarchyStatus",
+  "taskMatcherReadModel",
+] as const;
+
+const TASK_LABEL_DERIVED_SURFACES = [
+  "taskLabelRows",
+  "taskMatcherReadModel",
+] as const;
+
+const COMMENT_DERIVED_SURFACES = [
+  "commentRows",
+  "commentSummary",
+  "taskCommentMatcherModel",
+  "taskMatcherReadModel",
+] as const;
+
+const TRACK_DERIVED_SURFACES = [
+  "trackRows",
+  "taskAssignmentRows",
+  "assignmentSummary",
+  "taskAssignmentMatcherModel",
+  "taskMatcherReadModel",
+] as const;
+
+const ASSIGNMENT_DERIVED_SURFACES = [
+  "taskAssignmentRows",
+  "assignmentSummary",
+  "taskAssignmentMatcherModel",
+  "taskMatcherReadModel",
+] as const;
+
 export type PrismMutation =
   | {
     kind: "object.create" | "object.update";
@@ -232,6 +296,7 @@ export function createPrismStore(options: PrismStoreOptions = {}): PrismStore {
     projectId,
     shardId,
     actorId: options.actorId ?? "unblock-api",
+    readMode: options.readMode ?? (process.env.UNBLOCK_PRISM_READ_MODE === "materialized" ? "materialized" : "query"),
     fragmentCompiler: options.fragmentCompiler ?? new PrismRuntimeMatcherFragmentCompiler(client, { projectId }),
     matcherFragmentLoweringOptions: options.matcherFragmentLoweringOptions ?? defaultMatcherFragmentLoweringOptions(),
   });
@@ -262,6 +327,7 @@ export class PrismStore implements AppStore {
     projectId: string;
     shardId: string;
     actorId: string;
+    readMode: "query" | "materialized";
     fragmentCompiler: MatcherFragmentCompiler;
     matcherFragmentLoweringOptions: MatcherFragmentLoweringOptions;
   }) {
@@ -299,14 +365,33 @@ export class PrismStore implements AppStore {
     await this.flush(operations, idempotencyKey);
   }
 
-  async rows<T extends Record<string, unknown>>(surfaceId: string): Promise<T[]> {
-    const cacheKey = `rows:${surfaceId}`;
+  async rows<T extends Record<string, unknown>>(surfaceId: string, replacementScope?: string): Promise<T[]> {
+    if (this.options.readMode === "materialized") {
+      return await this.readRows<T>(surfaceId, replacementScope);
+    }
+    const cacheKey = `rows:${surfaceId}:${replacementScope ?? ""}:${this.options.readMode}`;
     let pending = this.rowCache.get(cacheKey);
     if (!pending) {
-      pending = this.query<T>(surfaceId) as Promise<Record<string, unknown>[]>;
+      pending = this.readRows<T>(surfaceId, replacementScope) as Promise<Record<string, unknown>[]>;
       this.rowCache.set(cacheKey, pending);
     }
     return await pending as T[];
+  }
+
+  private async readRows<T extends Record<string, unknown>>(surfaceId: string, replacementScope?: string): Promise<T[]> {
+    if (this.options.readMode === "materialized") {
+      const rows = await this.options.client.readMaterializedSurface<T>({
+        projectId: this.options.projectId,
+        shardId: this.options.shardId,
+        appId: "unblock",
+        surfaceId,
+        limit: 10_000,
+        offset: 0,
+      });
+      if (!replacementScope) return rows;
+      return rows.filter((row) => row.project_id === replacementScope || row.id === replacementScope);
+    }
+    return await this.query<T>(surfaceId);
   }
 
   async query<T extends Record<string, unknown>>(surfaceId: string, input: Record<string, unknown> = {}): Promise<T[]> {
@@ -423,7 +508,6 @@ export class PrismStore implements AppStore {
 
   private async flush(operations: PrismMutation[], idempotencyKey: string): Promise<void> {
     if (operations.length === 0) return;
-    this.clearReadCaches();
     await this.options.client.submitSemanticCommit({
       projectId: this.options.projectId,
       shardId: this.options.shardId,
@@ -432,13 +516,106 @@ export class PrismStore implements AppStore {
       idempotencyKey,
       operations: operations.map(toSemanticOperation),
     });
-    this.clearReadCaches();
+    this.invalidateReadCaches(operations);
   }
 
-  private clearReadCaches(): void {
-    this.matcherResultCache.clear();
-    this.rowCache.clear();
-    this.tagReadCache.clear();
+  private invalidateReadCaches(operations: PrismMutation[]): void {
+    const surfaces = new Set<string>();
+    let clearMatcherResults = false;
+    let clearTagReads = false;
+    let clearAllRows = false;
+
+    for (const operation of operations) {
+      switch (operation.kind) {
+        case "object.create":
+        case "object.update":
+        case "object.delete":
+          switch (operation.objectKind) {
+            case "Project":
+              surfaces.add("projectRows");
+              clearTagReads = true;
+              break;
+            case "Task":
+              addAll(surfaces, TASK_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            case "Comment":
+              addAll(surfaces, COMMENT_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            case "Track":
+              addAll(surfaces, TRACK_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            case "Instruction":
+              surfaces.add("instructionRows");
+              surfaces.add("instructionSelectorCatalog");
+              break;
+            case "SavedSelector":
+              surfaces.add("savedSelectorRows");
+              surfaces.add("savedSelectorCatalog");
+              break;
+            case "ActivityEvent":
+              surfaces.add("activityRows");
+              break;
+            default:
+              clearAllRows = true;
+              clearMatcherResults = true;
+              clearTagReads = true;
+          }
+          break;
+        case "relation.link":
+        case "relation.unlink":
+          switch (operation.relationKind) {
+            case "TaskDependsOnTask":
+              addAll(surfaces, DEPENDENCY_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            case "TaskContainsTask":
+              addAll(surfaces, HIERARCHY_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            case "TaskAssignedToTrack":
+              addAll(surfaces, ASSIGNMENT_DERIVED_SURFACES);
+              clearMatcherResults = true;
+              break;
+            default:
+              clearAllRows = true;
+              clearMatcherResults = true;
+          }
+          break;
+        case "tag.set":
+        case "tag.clear":
+          clearTagReads = true;
+          if (operation.tagId === "task.label") {
+            addAll(surfaces, TASK_LABEL_DERIVED_SURFACES);
+            clearMatcherResults = true;
+          } else if (operation.tagId === "project.label_definition") {
+            surfaces.add("taskLabelRows");
+            clearMatcherResults = true;
+          } else {
+            clearMatcherResults = true;
+          }
+          break;
+        default:
+          clearAllRows = true;
+          clearMatcherResults = true;
+          clearTagReads = true;
+      }
+    }
+
+    if (clearAllRows) this.rowCache.clear();
+    else this.deleteRowCaches(surfaces);
+    if (clearMatcherResults) this.matcherResultCache.clear();
+    if (clearTagReads) this.tagReadCache.clear();
+  }
+
+  private deleteRowCaches(surfaceIds: Set<string>): void {
+    if (surfaceIds.size === 0) return;
+    for (const key of this.rowCache.keys()) {
+      const surfaceId = key.slice("rows:".length).split(":", 1)[0];
+      if (surfaceId && surfaceIds.has(surfaceId)) this.rowCache.delete(key);
+    }
   }
 
   private async fetchMatcherTaskIds(fragment: AdmittedMatcherFragment, input: Record<string, unknown>): Promise<string[]> {
@@ -752,7 +929,7 @@ class PrismProjectRepository implements ProjectRepository {
   }
 
   async get(id: string): Promise<Project | null> {
-    return (await this.list()).find((project) => project.id === id) ?? null;
+    return (await this.store.rows<ProjectRow>("projectRows", id)).map(projectFromRow)[0] ?? null;
   }
 
   async create(project: Project): Promise<void> {
@@ -768,8 +945,7 @@ class PrismTaskRepository implements TaskRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<Task[]> {
-    return (await tasksFromPrism(this.store))
-      .filter((task) => !projectId || task.projectId === projectId)
+    return (await tasksFromPrism(this.store, projectId))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
@@ -801,7 +977,7 @@ class PrismDependencyRepository implements DependencyRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<Dependency[]> {
-    return (await this.store.rows<DependencyRow>("taskDependencyRows"))
+    return (await this.store.rows<DependencyRow>("taskDependencyRows", projectId))
       .map(dependencyFromRow)
       .filter((dependency) => !projectId || dependency.projectId === projectId);
   }
@@ -847,7 +1023,7 @@ class PrismCommentRepository implements CommentRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<Comment[]> {
-    return (await this.store.rows<CommentRow>("commentRows"))
+    return (await this.store.rows<CommentRow>("commentRows", projectId))
       .map(commentFromRow)
       .filter((comment) => !projectId || comment.projectId === projectId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
@@ -896,6 +1072,11 @@ class PrismTagRepository implements TagRepository {
   }
 
   async listTaskTags(projectId?: string): Promise<TaskTag[]> {
+    if (projectId) {
+      return (await this.store.rows<TaskLabelRow>("taskLabelRows", projectId))
+        .map(taskTagFromRow)
+        .sort((a, b) => a.taskId.localeCompare(b.taskId) || a.tagId.localeCompare(b.tagId));
+    }
     const taskIds = projectId ? new Set((await this.store.tasks.list(projectId)).map((task) => task.id)) : null;
     const taskTags = (await this.store.findTags("task.label"))
       .map(taskTagFromAssignment)
@@ -932,7 +1113,7 @@ class PrismTrackRepository implements TrackRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<Track[]> {
-    return (await this.store.rows<TrackRow>("trackRows"))
+    return (await this.store.rows<TrackRow>("trackRows", projectId))
       .map(trackFromRow)
       .filter((track) => !projectId || track.projectId === projectId)
       .sort((a, b) => a.machine.localeCompare(b.machine) || a.actor.localeCompare(b.actor));
@@ -955,7 +1136,7 @@ class PrismTrackRepository implements TrackRepository {
   }
 
   async listAssignments(projectId?: string): Promise<TrackAssignment[]> {
-    return (await this.store.rows<AssignmentRow>("taskAssignmentRows"))
+    return (await this.store.rows<AssignmentRow>("taskAssignmentRows", projectId))
       .map(assignmentFromRow)
       .filter((assignment) => !projectId || assignment.projectId === projectId)
       .sort((a, b) => a.trackId.localeCompare(b.trackId) || a.position.localeCompare(b.position));
@@ -982,7 +1163,7 @@ class PrismInstructionRepository implements InstructionRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<Instruction[]> {
-    return (await this.store.rows<InstructionRow>("instructionRows"))
+    return (await this.store.rows<InstructionRow>("instructionRows", projectId))
       .map(instructionFromRow)
       .filter((instruction) => !projectId || instruction.projectId === projectId)
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
@@ -1032,7 +1213,7 @@ class PrismSavedViewRepository implements SavedViewRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<SavedView[]> {
-    return (await this.store.rows<SavedSelectorRow>("savedSelectorRows"))
+    return (await this.store.rows<SavedSelectorRow>("savedSelectorRows", projectId))
       .filter((row) => row.kind === "view")
       .map(savedViewFromRow)
       .filter((view) => !projectId || view.projectId === projectId)
@@ -1069,7 +1250,7 @@ class PrismQueueFeedRepository implements QueueFeedRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string): Promise<QueueFeed[]> {
-    return (await this.store.rows<SavedSelectorRow>("savedSelectorRows"))
+    return (await this.store.rows<SavedSelectorRow>("savedSelectorRows", projectId))
       .filter((row) => row.kind === "feed")
       .map(queueFeedFromRow)
       .filter((feed) => !projectId || feed.projectId === projectId)
@@ -1106,7 +1287,7 @@ class PrismActivityRepository implements ActivityRepository {
   constructor(private readonly store: PrismStore) {}
 
   async list(projectId?: string | null, limit = 100): Promise<Activity[]> {
-    return (await this.store.rows<ActivityRow>("activityRows"))
+    return (await this.store.rows<ActivityRow>("activityRows", projectId ?? undefined))
       .map(activityFromRow)
       .filter((activity) => projectId === null || projectId === undefined || activity.projectId === projectId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -1445,13 +1626,15 @@ function assignmentRelationId(projectId: string, taskId: string, trackId: string
   return `${projectId}:assigned:${taskId}:${trackId}`;
 }
 
-async function tasksFromPrism(store: PrismStore): Promise<Task[]> {
+async function tasksFromPrism(store: PrismStore, projectId?: string): Promise<Task[]> {
   const [taskRows, hierarchyRows] = await Promise.all([
-    store.rows<TaskRow>("taskRows"),
-    store.rows<HierarchyRow>("taskHierarchyRows"),
+    store.rows<TaskRow>("taskRows", projectId),
+    store.rows<HierarchyRow>("taskHierarchyRows", projectId),
   ]);
   const parentByTask = new Map(hierarchyRows.map((row) => [scopedKey(row.project_id, row.task_id), row.parent_task_id]));
-  return taskRows.map((row) => taskFromRow(row, parentByTask.get(scopedKey(row.project_id, row.id)) ?? null));
+  return taskRows
+    .map((row) => taskFromRow(row, parentByTask.get(scopedKey(row.project_id, row.id)) ?? null))
+    .filter((task) => !projectId || task.projectId === projectId);
 }
 
 function projectFromRow(row: ProjectRow): Project {
@@ -1536,6 +1719,15 @@ function taskTagFromAssignment(assignment: PrismTagAssignment): TaskTag | null {
     taskId: subject.id,
     tagId: stringValue(assignment.value.id, assignment.valueKey),
     createdAt: stringValue(assignment.value.assigned_at, ""),
+  };
+}
+
+function taskTagFromRow(row: TaskLabelRow): TaskTag {
+  return {
+    projectId: row.project_id,
+    taskId: row.task_id,
+    tagId: row.label_id,
+    createdAt: row.assigned_at,
   };
 }
 
@@ -1708,6 +1900,10 @@ function hashJson(value: unknown): string {
   return `fnv1a:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+function addAll(target: Set<string>, values: readonly string[]): void {
+  for (const value of values) target.add(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1864,6 +2060,13 @@ type HierarchyRow = {
   project_id: string;
   parent_task_id: string;
   task_id: string;
+};
+
+type TaskLabelRow = {
+  project_id: string;
+  task_id: string;
+  label_id: string;
+  assigned_at: string;
 };
 
 type CommentRow = {

@@ -1,5 +1,5 @@
 import { execFile as execFileCallback, spawn, type ChildProcessByStdio } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cpus } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,12 +21,16 @@ interface RunnerOptions {
   bind: string;
   postgresUrl: string | undefined;
   schema: string;
+  materializedSurfaceSchema: string | undefined;
+  runtimeTablePrefix: string;
   prismCli: string;
   generatedDir: string;
   startPrism: boolean;
   migrate: boolean;
   activate: boolean;
   keepPrism: boolean;
+  cleanupSchema: boolean;
+  cleanupRuntimeTables: boolean;
   tasks: number;
   projects: number;
   dependencyFanout: number;
@@ -63,6 +67,7 @@ interface RunnerReport {
   workloadId: string;
   endpoint: string;
   schema: string;
+  runtimeTablePrefix: string;
   runtimeBackend: "runtime-v2";
   scale: {
     tasks: number;
@@ -127,6 +132,7 @@ async function main(): Promise<void> {
   if (options.tags < 1) throw new Error("--tags must be at least 1");
   if (options.instructions < 1) throw new Error("--instructions must be at least 1");
   const generatedRuntimeSchema = await runtimeSchemaFromGeneratedSql(options.generatedDir);
+  options.materializedSurfaceSchema ??= options.schema;
 
   const phases: PhaseMetric[] = [];
   const startedAt = performance.now();
@@ -188,6 +194,7 @@ async function main(): Promise<void> {
       workloadId: options.workloadId,
       endpoint: options.endpoint,
       schema: options.schema,
+      runtimeTablePrefix: options.runtimeTablePrefix,
       runtimeBackend: "runtime-v2",
       scale: {
         tasks: options.tasks,
@@ -216,6 +223,12 @@ async function main(): Promise<void> {
   } finally {
     if (prism && !options.keepPrism) {
       await stopProcess(prism);
+    }
+    if (!options.keepPrism && options.cleanupRuntimeTables) {
+      await dropRuntimeTables(options);
+    }
+    if (!options.keepPrism && options.cleanupSchema) {
+      await dropCatalogSchema(options);
     }
   }
 }
@@ -632,8 +645,13 @@ function startPrismServe(options: RunnerOptions): PrismProcess {
     options.endpoint,
     "--schema",
     options.schema,
+    "--runtime-v2-postgres-table-prefix",
+    options.runtimeTablePrefix,
   ];
   if (options.postgresUrl) args.push("--postgres-url", options.postgresUrl);
+  if (options.materializedSurfaceSchema) {
+    args.push("--runtime-v2-materialized-surface-schema", options.materializedSurfaceSchema);
+  }
   const child = spawn(options.prismCli, args, {
     cwd: REPO_ROOT,
     env: {
@@ -702,6 +720,50 @@ async function runPrism(options: RunnerOptions, args: string[], settings: { quie
   });
 }
 
+async function dropRuntimeTables(options: RunnerOptions): Promise<void> {
+  if (!options.postgresUrl) return;
+  validateRuntimeTablePrefix(options.runtimeTablePrefix);
+  const prefix = sqlLiteral(options.runtimeTablePrefix);
+  const sql = `
+do $$
+declare
+  table_row record;
+begin
+  for table_row in
+    select schemaname, tablename
+      from pg_tables
+     where schemaname = 'public'
+       and tablename like ${prefix} || '\\_%' escape '\\'
+  loop
+    execute format('drop table if exists %I.%I cascade', table_row.schemaname, table_row.tablename);
+  end loop;
+end $$;
+`;
+  await execFileChecked("psql", [options.postgresUrl, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], {
+    cwd: REPO_ROOT,
+    env: process.env,
+    quiet: true,
+  });
+}
+
+async function dropCatalogSchema(options: RunnerOptions): Promise<void> {
+  if (!options.postgresUrl) return;
+  validatePostgresIdentifier(options.schema, "--schema");
+  if (options.schema === "public") return;
+  await execFileChecked("psql", [
+    options.postgresUrl,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-q",
+    "-c",
+    `drop schema if exists ${quotedIdentifier(options.schema)} cascade;`,
+  ], {
+    cwd: REPO_ROOT,
+    env: process.env,
+    quiet: true,
+  });
+}
+
 async function runtimeSchemaFromGeneratedSql(generatedDir: string): Promise<string | null> {
   const sqlPath = join(generatedDir, "desired_schema.sql");
   if (!existsSync(sqlPath)) return null;
@@ -765,8 +827,13 @@ function parseArgs(args: string[]): RunnerOptions {
   const workloadId = stringOption(args, "workload-id", `bench-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`);
   const bind = stringOption(args, "bind", "127.0.0.1:50061");
   const endpoint = stringOption(args, "endpoint", `http://${bind}`);
-  const schema = stringOption(args, "schema", "prism");
+  const explicitSchema = optionalStringOption(args, "schema");
+  const schema = explicitSchema ?? catalogSchemaForWorkload(workloadId);
+  validatePostgresIdentifier(schema, "--schema");
   const mode = parseMode(stringOption(args, "mode", args.includes("--mixed") ? "mixed" : "bulk"));
+  const explicitRuntimeTablePrefix = optionalStringOption(args, "runtime-table-prefix");
+  const runtimeTablePrefix = explicitRuntimeTablePrefix ?? runtimeTablePrefixForWorkload(workloadId);
+  validateRuntimeTablePrefix(runtimeTablePrefix);
   return {
     mode,
     workloadId,
@@ -780,12 +847,16 @@ function parseArgs(args: string[]): RunnerOptions {
     bind,
     postgresUrl: optionalStringOption(args, "postgres-url") ?? process.env.PRISM_POSTGRES_URL,
     schema,
+    materializedSurfaceSchema: optionalStringOption(args, "materialized-surface-schema"),
+    runtimeTablePrefix,
     prismCli: stringOption(args, "prism-cli", defaultPrismCli()),
     generatedDir: stringOption(args, "generated-dir", join(PACKAGE_ROOT, "generated")),
     startPrism: booleanOption(args, "start-prism", true),
     migrate: booleanOption(args, "migrate", true),
     activate: booleanOption(args, "activate", true),
     keepPrism: booleanOption(args, "keep-prism", false),
+    cleanupSchema: booleanOption(args, "cleanup-schema", explicitSchema === undefined),
+    cleanupRuntimeTables: booleanOption(args, "cleanup-runtime-tables", explicitRuntimeTablePrefix === undefined),
     tasks: numberOption(args, "tasks", 50),
     projects: numberOption(args, "projects", 1),
     dependencyFanout: numberOption(args, "dependency-fanout", 2),
@@ -799,6 +870,34 @@ function parseArgs(args: string[]): RunnerOptions {
     waitPollMs: numberOption(args, "wait-poll-ms", 250),
     json: booleanOption(args, "json", false),
   };
+}
+
+function runtimeTablePrefixForWorkload(workloadId: string): string {
+  const digest = createHash("sha256").update(workloadId).digest("hex").slice(0, 16);
+  return `prism_v2_b_${digest}`;
+}
+
+function validateRuntimeTablePrefix(prefix: string): void {
+  validatePostgresIdentifier(prefix, "--runtime-table-prefix");
+}
+
+function catalogSchemaForWorkload(workloadId: string): string {
+  const digest = createHash("sha256").update(workloadId).digest("hex").slice(0, 16);
+  return `prism_bench_${digest}`;
+}
+
+function validatePostgresIdentifier(value: string, optionName: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,56}$/.test(value)) {
+    throw new Error(`${optionName} must be an ASCII Postgres identifier with at most 57 chars`);
+  }
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function quotedIdentifier(value: string): string {
+  return `"${value.replace(/"/g, "\"\"")}"`;
 }
 
 function parseMode(value: string): "bulk" | "mixed" {
