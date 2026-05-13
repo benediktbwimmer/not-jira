@@ -1,0 +1,916 @@
+syntax = "proto3";
+
+package prism.runtime.v1;
+
+service RuntimeService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ActiveManifest(ActiveManifestRequest) returns (ActiveManifestResponse);
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
+  rpc SubmitSemanticCommit(SubmitSemanticCommitRequest) returns (SubmitSemanticCommitResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc ReadObject(ReadObjectRequest) returns (ObjectResponse);
+  rpc ReadRelation(ReadRelationRequest) returns (RelationResponse);
+  rpc ReadSubjectTags(SubjectTagsRequest) returns (SubjectTagsResponse);
+  rpc FindSubjectsByTag(TagSubjectsRequest) returns (TagSubjectsResponse);
+  rpc ReadMaterializedSurface(MaterializedSurfaceRequest) returns (MaterializedSurfaceResponse);
+  rpc StartWorkflow(WorkflowStartRequest) returns (WorkflowStartResponse);
+  rpc ReadWorkflow(WorkflowReadRequest) returns (WorkflowReadResponse);
+  rpc WatchWorkflow(WorkflowWatchRequest) returns (WorkflowReadResponse);
+  rpc CancelWorkflow(WorkflowCancelRequest) returns (WorkflowCancelResponse);
+  rpc UpdateWorkflowMetadata(WorkflowMetadataUpdateRequest) returns (WorkflowMetadataUpdateResponse);
+  rpc EditWorkflow(WorkflowEditRequest) returns (WorkflowEditResponse);
+  rpc DrainWorkflows(WorkflowDrainRequest) returns (WorkflowDrainResponse);
+  rpc WorkflowBacklog(WorkflowBacklogRequest) returns (WorkflowBacklogResponse);
+  rpc WorkflowCatalog(WorkflowCatalogRequest) returns (WorkflowCatalogResponse);
+  rpc WorkflowRegistry(WorkflowRegistryRequest) returns (WorkflowRegistryResponse);
+  rpc WorkflowLifecycle(WorkflowLifecycleRequest) returns (WorkflowLifecycleResponse);
+  rpc AdvanceWorkflowWaits(WorkflowWaitAdvanceRequest) returns (WorkflowWaitAdvanceResponse);
+  rpc InspectWorkflows(WorkflowInspectRequest) returns (WorkflowInspectResponse);
+  rpc WorkflowRuntimeStatus(WorkflowRuntimeStatusRequest) returns (WorkflowRuntimeStatusResponse);
+  rpc WatchObjectProperty(WatchObjectPropertyRequest) returns (stream WatchObjectPropertyResponse);
+  rpc WatchObjectProperties(WatchObjectPropertiesRequest) returns (stream WatchObjectPropertiesResponse);
+  rpc WatchObjectPropertiesOnce(WatchObjectPropertiesRequest) returns (WatchObjectPropertiesResponse);
+  rpc BatchRuntime(RuntimeBatchRequest) returns (RuntimeBatchResponse);
+  rpc StreamRuntime(stream RuntimeRequest) returns (stream RuntimeResponse);
+  rpc ConnectExecutor(stream ExecutorStreamRequest) returns (stream ExecutorStreamResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  string runtime_schema = 2;
+  bool postgres = 3;
+  string observation_json = 4;
+}
+
+message ActiveManifestRequest {
+  string project_id = 1;
+}
+
+message ActiveManifestResponse {
+  bool found = 1;
+  ActiveManifest manifest = 2;
+}
+
+message ActiveManifest {
+  string project_id = 1;
+  string manifest_hash = 2;
+  uint64 app_count = 3;
+  uint64 object_count = 4;
+  uint64 relation_count = 5;
+  uint64 surface_count = 6;
+  uint64 job_count = 7;
+  uint64 behavior_count = 8;
+  uint64 workflow_count = 9;
+}
+
+message ExecuteCommandRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string command_id = 3;
+  string actor_id = 4;
+  string idempotency_key = 5;
+  string manifest_hash = 6;
+  string payload_json = 7;
+  map<string, string> headers = 8;
+  string source_instance_id = 9;
+}
+
+message ExecuteCommandResponse {
+  string request_id = 1;
+  string command_id = 2;
+  string outcome = 3;
+  bool policy_accepted = 4;
+  string commit_id = 5;
+  bool has_commit_id = 6;
+  string receipt_json = 7;
+  string summary_json = 8;
+  uint64 elapsed_ms = 9;
+  string stages_json = 10;
+}
+
+message SubmitSemanticCommitRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string actor_id = 4;
+  string idempotency_key = 5;
+  string operations_json = 6;
+  map<string, string> headers = 7;
+  string source_instance_id = 8;
+}
+
+message SubmitSemanticCommitResponse {
+  string request_id = 1;
+  string outcome = 2;
+  string commit_id = 3;
+  bool has_commit_id = 4;
+  string receipt_json = 5;
+  uint64 elapsed_ms = 6;
+  uint32 operation_count = 7;
+  uint32 mutation_count = 8;
+}
+
+message Page {
+  uint32 limit = 1;
+  uint32 offset = 2;
+}
+
+message QueryRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string surface_id = 4;
+  string input_json = 5;
+  Page page = 6;
+  string consistency = 7;
+}
+
+message QueryResponse {
+  string project_id = 1;
+  string manifest_hash = 2;
+  string app_id = 3;
+  string surface_id = 4;
+  repeated string records_json = 5;
+  string first_json = 6;
+  bool has_first = 7;
+  uint32 limit = 8;
+  uint32 offset = 9;
+  string consistency_json = 10;
+}
+
+message ReadObjectRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string object_kind = 4;
+  string object_id = 5;
+}
+
+message ObjectResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string object_kind = 4;
+  string object_id = 5;
+  bool found = 6;
+  string record_json = 7;
+}
+
+message ReadRelationRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string relation_kind = 4;
+  string from_id = 5;
+  string to_id = 6;
+}
+
+message RelationResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string relation_kind = 4;
+  string from_id = 5;
+  string to_id = 6;
+  bool found = 7;
+  string record_json = 8;
+}
+
+message SubjectTagsRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string subject_ref = 3;
+  string tag_id = 4;
+}
+
+message SubjectTagsResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string subject_ref = 3;
+  repeated TagAssignment assignments = 4;
+}
+
+message TagSubjectsRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string tag_id = 3;
+  string value_key = 4;
+  Page page = 5;
+}
+
+message TagSubjectsResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string tag_id = 3;
+  repeated TagAssignment assignments = 4;
+  uint32 limit = 5;
+  uint32 offset = 6;
+}
+
+message TagAssignment {
+  string subject_ref = 1;
+  string tag_id = 2;
+  string value_key = 3;
+  bool value_present = 4;
+  string value_json = 5;
+  string origin = 6;
+  string surface_app_id = 7;
+  string surface_id = 8;
+  string replacement_scope = 9;
+}
+
+message MaterializedSurfaceRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string surface_id = 4;
+  string replacement_scope = 5;
+  Page page = 6;
+}
+
+message MaterializedSurfaceResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string surface_id = 4;
+  repeated MaterializedOutput outputs = 5;
+  uint32 limit = 6;
+  uint32 offset = 7;
+}
+
+message MaterializedOutput {
+  string output_key = 1;
+  string output_kind = 2;
+  string replacement_scope = 3;
+  string output_hash = 4;
+  string output_json = 5;
+  string source_run_id = 6;
+}
+
+message WorkflowStartRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string workflow_id = 4;
+  string workflow_key = 5;
+  string input_json = 6;
+  string metadata_json = 7;
+  string parent_workflow_ref = 8;
+  string mode = 9;
+}
+
+message WorkflowStartResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string workflow_id = 4;
+  string workflow_key = 5;
+  string workflow_ref = 6;
+  string manifest_hash = 7;
+  string workflow_ir_hash = 8;
+  string status = 9;
+  bool created = 10;
+  WorkflowInstance instance = 11;
+}
+
+message WorkflowReadRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string workflow_id = 4;
+  string workflow_key = 5;
+}
+
+message WorkflowReadResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string workflow_id = 4;
+  string workflow_key = 5;
+  bool found = 6;
+  WorkflowInstance instance = 7;
+  repeated WorkflowEffect effects = 8;
+  repeated WorkflowWait waits = 9;
+  repeated WorkflowChild children = 10;
+}
+
+message WorkflowWatchRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string workflow_id = 4;
+  string workflow_key = 5;
+  uint64 timeout_ms = 6;
+}
+
+message WorkflowCancelRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string workflow_key = 3;
+  string reason = 4;
+}
+
+message WorkflowCancelResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string workflow_key = 3;
+  bool canceled = 4;
+  bool found = 5;
+  WorkflowInstance instance = 6;
+}
+
+message WorkflowMetadataUpdateRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string workflow_key = 3;
+  string metadata_json = 4;
+  int64 updated_sequence = 5;
+}
+
+message WorkflowMetadataUpdateResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string workflow_key = 3;
+  string metadata_json = 4;
+  int64 updated_sequence = 5;
+  bool updated = 6;
+}
+
+message WorkflowEditRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string request_json = 3;
+}
+
+message WorkflowEditResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string workflow_key = 3;
+  string mode = 4;
+  string plan_json = 5;
+  string record_json = 6;
+  bool has_record = 7;
+  string active_view_json = 8;
+  bool has_active_view = 9;
+  string side_effect_index_json = 10;
+  uint64 accepted_sequence = 11;
+  bool has_accepted_sequence = 12;
+  uint64 appended_operations = 13;
+}
+
+message WorkflowDrainRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  uint32 max_candidates = 3;
+  uint32 max_records = 4;
+  bool include_explain = 5;
+  repeated string explicit_workflow_keys = 6;
+  string app_filter = 7;
+  string workflow_filter = 8;
+}
+
+message WorkflowDrainResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  bool accepted = 3;
+  uint64 accepted_sequence = 4;
+  uint64 appended_records = 5;
+  uint64 appended_operations = 6;
+  string outcomes_json = 7;
+  repeated string executed_json = 8;
+  repeated string explain_json = 9;
+  string summary_json = 10;
+}
+
+message WorkflowBacklogRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_filter = 3;
+  string workflow_filter = 4;
+  bool include_pending_effect_workflows = 5;
+}
+
+message WorkflowBacklogResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string report_json = 3;
+  uint64 pressure_score = 4;
+  uint64 blocked_instances = 5;
+}
+
+message WorkflowCatalogRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  bool compact = 3;
+  bool include_activation_entries = 4;
+  bool include_workflow_breakdown = 5;
+  bool include_queue_batches = 6;
+  bool include_drain_executions = 7;
+  bool include_drain_preview = 8;
+  WorkflowDrainRequest drain_preview = 9;
+}
+
+message WorkflowCatalogResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string health_status = 3;
+  string snapshot_json = 4;
+}
+
+message WorkflowRegistryRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  bool include_programs = 3;
+}
+
+message WorkflowRegistryResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string analysis_json = 3;
+  repeated string programs_json = 4;
+  bool activation_usable = 5;
+  repeated string activation_errors = 6;
+}
+
+message WorkflowRuntimeStatusRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  bool include_activation_summary = 3;
+  bool include_registry_programs = 4;
+  bool include_observation = 5;
+  bool include_catalog = 6;
+  WorkflowCatalogRequest catalog = 7;
+}
+
+message WorkflowRuntimeStatusResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  bool configured = 3;
+  bool active = 4;
+  uint64 generation = 5;
+  string manifest_hash = 6;
+  bool activation_usable = 7;
+  uint64 executable_programs = 8;
+  uint64 manifest_workflows = 9;
+  repeated string activation_errors = 10;
+  string activation_summary_json = 11;
+  string registry_analysis_json = 12;
+  repeated string registry_programs_json = 13;
+  string observation_json = 14;
+  string catalog_json = 15;
+  string summary_json = 16;
+}
+
+message WorkflowLifecycleRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_filter = 3;
+  string workflow_filter = 4;
+  repeated string statuses = 5;
+  bool include_terminal = 6;
+  bool only_blocked = 7;
+  bool only_runnable = 8;
+  uint64 due_before_or_at_ms = 9;
+  bool has_parent_filter = 10;
+  bool has_parent = 11;
+  uint32 limit = 12;
+  bool include_groups = 13;
+  bool include_keys = 14;
+}
+
+message WorkflowLifecycleResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string index_json = 3;
+  repeated string selected_json = 4;
+  repeated string selected_keys = 5;
+  repeated string groups_json = 6;
+  uint64 total_selected_before_limit = 7;
+  bool truncated = 8;
+  string summary_json = 9;
+}
+
+message WorkflowWaitAdvanceRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  uint64 now_ms = 3;
+  uint32 max_waits = 4;
+  bool satisfy_temporal = 5;
+  bool satisfy_graph_predicates = 6;
+  bool time_out_waits = 7;
+  bool fail_invalid_predicates = 8;
+  bool append = 9;
+}
+
+message WorkflowWaitAdvanceResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  bool appended = 3;
+  bool accepted = 4;
+  uint64 accepted_sequence = 5;
+  uint64 appended_operations = 6;
+  string plan_json = 7;
+  string summary_json = 8;
+}
+
+message WorkflowInspectRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_filter = 3;
+  string workflow_filter = 4;
+  repeated string workflow_keys = 5;
+  repeated string statuses = 6;
+  bool include_terminal = 7;
+  bool only_blocked = 8;
+  bool only_runnable = 9;
+  uint64 due_before_or_at_ms = 10;
+  bool has_parent_filter = 11;
+  bool has_parent = 12;
+  uint64 now_ms = 13;
+  uint32 limit = 14;
+  bool include_groups = 15;
+  bool include_children = 16;
+  bool include_wait_evaluations = 17;
+  bool include_issue_details = 18;
+  bool include_snapshots = 19;
+  string minimum_severity = 20;
+  uint32 max_waits = 21;
+  uint64 large_input_bytes = 22;
+  uint64 large_output_bytes = 23;
+  uint64 large_local_state_bytes = 24;
+}
+
+message WorkflowInspectResponse {
+  string project_id = 1;
+  string shard_id = 2;
+  string health = 3;
+  string index_json = 4;
+  string counts_json = 5;
+  repeated string rows_json = 6;
+  repeated string groups_json = 7;
+  repeated string issues_json = 8;
+  string wait_summary_json = 9;
+  string wait_plan_json = 10;
+  repeated string selected_keys = 11;
+  repeated string omitted_keys = 12;
+  string summary_json = 13;
+}
+
+message WorkflowInstance {
+  string app_id = 1;
+  string workflow_id = 2;
+  string workflow_key = 3;
+  string workflow_ref = 4;
+  string manifest_hash = 5;
+  string workflow_ir_hash = 6;
+  string started_manifest_hash = 7;
+  string current_runtime_manifest_hash_seen_at_last_resume = 8;
+  string status = 9;
+  string input_json = 10;
+  string output_json = 11;
+  bool has_output = 12;
+  string metadata_json = 13;
+  string error_class = 14;
+  string error_message = 15;
+  string parent_workflow_ref = 16;
+  string current_program_counter = 17;
+}
+
+message WorkflowEffect {
+  string workflow_key = 1;
+  string effect_id = 2;
+  string effect_kind = 3;
+  string effect_key = 4;
+  string status = 5;
+  string input_json = 6;
+  string output_json = 7;
+  bool has_output = 8;
+  string error_class = 9;
+  string error_message = 10;
+  repeated string dependency_refs = 11;
+  string external_ref = 12;
+}
+
+message WorkflowWait {
+  string workflow_key = 1;
+  string wait_id = 2;
+  string label = 3;
+  string status = 4;
+  repeated string dependency_refs = 5;
+  string predicate_json = 6;
+}
+
+message WorkflowChild {
+  string parent_workflow_key = 1;
+  string child_workflow_ref = 2;
+  string child_shard_id = 3;
+  string cancellation_policy = 4;
+  string metadata_json = 5;
+}
+
+message WatchObjectPropertyRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  string app_id = 3;
+  string object_kind = 4;
+  string object_id = 5;
+  string property = 6;
+  string equals_json = 7;
+  uint64 timeout_ms = 8;
+  uint64 poll_interval_ms = 9;
+}
+
+message WatchObjectPropertyResponse {
+  string status = 1;
+  bool matched = 2;
+  bool found = 3;
+  string record_json = 4;
+  uint64 elapsed_ms = 5;
+  uint32 attempts = 6;
+}
+
+message WatchObjectPropertyPredicate {
+  string app_id = 1;
+  string object_kind = 2;
+  string object_id = 3;
+  string property = 4;
+  string equals_json = 5;
+}
+
+message WatchObjectPropertiesRequest {
+  string project_id = 1;
+  string shard_id = 2;
+  repeated WatchObjectPropertyPredicate predicates = 3;
+  string match_mode = 4;
+  uint64 timeout_ms = 5;
+  uint64 poll_interval_ms = 6;
+}
+
+message WatchObjectPropertyResult {
+  uint32 index = 1;
+  string app_id = 2;
+  string object_kind = 3;
+  string object_id = 4;
+  string property = 5;
+  bool matched = 6;
+  bool found = 7;
+  string record_json = 8;
+}
+
+message WatchObjectPropertiesResponse {
+  string status = 1;
+  bool matched = 2;
+  repeated WatchObjectPropertyResult results = 3;
+  uint64 elapsed_ms = 4;
+  uint32 attempts = 5;
+  uint32 outbox_waits = 6;
+}
+
+message RuntimeRequest {
+  string request_id = 1;
+  oneof request {
+    HealthRequest health = 10;
+    ActiveManifestRequest active_manifest = 11;
+    QueryRequest query = 12;
+    ReadObjectRequest read_object = 13;
+    ReadRelationRequest read_relation = 14;
+    SubjectTagsRequest read_subject_tags = 15;
+    TagSubjectsRequest find_subjects_by_tag = 16;
+    MaterializedSurfaceRequest read_materialized_surface = 17;
+    WatchObjectPropertyRequest watch_object_property = 18;
+    ExecuteCommandRequest execute_command = 19;
+    WatchObjectPropertiesRequest watch_object_properties = 20;
+    WorkflowStartRequest start_workflow = 21;
+    WorkflowReadRequest read_workflow = 22;
+    WorkflowCancelRequest cancel_workflow = 23;
+    WorkflowMetadataUpdateRequest update_workflow_metadata = 24;
+    WorkflowDrainRequest drain_workflows = 25;
+    WorkflowBacklogRequest workflow_backlog = 26;
+    WorkflowCatalogRequest workflow_catalog = 27;
+    WorkflowRegistryRequest workflow_registry = 28;
+    WorkflowLifecycleRequest workflow_lifecycle = 29;
+    WorkflowWaitAdvanceRequest advance_workflow_waits = 30;
+    WorkflowInspectRequest inspect_workflows = 31;
+    WorkflowRuntimeStatusRequest workflow_runtime_status = 32;
+    WorkflowWatchRequest watch_workflow = 33;
+    WorkflowEditRequest edit_workflow = 34;
+    SubmitSemanticCommitRequest submit_semantic_commit = 35;
+  }
+}
+
+message RuntimeResponse {
+  string request_id = 1;
+  oneof response {
+    HealthResponse health = 10;
+    ActiveManifestResponse active_manifest = 11;
+    QueryResponse query = 12;
+    ObjectResponse object = 13;
+    RelationResponse relation = 14;
+    SubjectTagsResponse subject_tags = 15;
+    TagSubjectsResponse tag_subjects = 16;
+    MaterializedSurfaceResponse materialized_surface = 17;
+    WatchObjectPropertyResponse watch_object_property = 18;
+    RuntimeError error = 19;
+    ExecuteCommandResponse execute_command = 20;
+    WatchObjectPropertiesResponse watch_object_properties = 21;
+    WorkflowStartResponse start_workflow = 22;
+    WorkflowReadResponse read_workflow = 23;
+    WorkflowCancelResponse cancel_workflow = 24;
+    WorkflowMetadataUpdateResponse update_workflow_metadata = 25;
+    WorkflowDrainResponse drain_workflows = 26;
+    WorkflowBacklogResponse workflow_backlog = 27;
+    WorkflowCatalogResponse workflow_catalog = 28;
+    WorkflowRegistryResponse workflow_registry = 29;
+    WorkflowLifecycleResponse workflow_lifecycle = 30;
+    WorkflowWaitAdvanceResponse advance_workflow_waits = 31;
+    WorkflowInspectResponse inspect_workflows = 32;
+    WorkflowRuntimeStatusResponse workflow_runtime_status = 33;
+    WorkflowReadResponse watch_workflow = 34;
+    WorkflowEditResponse edit_workflow = 35;
+    SubmitSemanticCommitResponse submit_semantic_commit = 36;
+  }
+}
+
+message RuntimeBatchRequest {
+  repeated RuntimeRequest requests = 1;
+}
+
+message RuntimeBatchResponse {
+  repeated RuntimeResponse responses = 1;
+}
+
+message ExecutorConnectRequest {
+  string executor_id = 1;
+  repeated string binding_ids = 2;
+  repeated string shard_ids = 3;
+  uint32 channel_capacity = 4;
+  string metadata_json = 5;
+  uint32 max_chunk_leases = 6;
+  uint64 max_items_in_flight = 7;
+  uint64 max_payload_bytes_in_flight = 8;
+  repeated string accepted_job_ids = 9;
+}
+
+message ExecutorCapacityRequest {
+  string shard_id = 1;
+  string binding_id = 2;
+  uint32 credits = 3;
+  uint32 max_chunk_leases = 4;
+  uint64 max_items_in_flight = 5;
+  uint64 max_payload_bytes_in_flight = 6;
+  repeated string accepted_job_ids = 7;
+}
+
+message ExecutorResultRequest {
+  string delivery_id = 1;
+  string status = 2;
+  string output_json = 3;
+  string completion_token_json = 4;
+}
+
+message ExecutorResultBatchRequest {
+  repeated ExecutorResultRequest results = 1;
+}
+
+message JobBatchChunkPayloadRef {
+  string kind = 1;
+  string payload_json = 2;
+  string artifact_id = 3;
+  string artifact_hash = 4;
+  uint64 first_item = 5;
+  uint32 item_count = 6;
+}
+
+message JobBatchChunkLease {
+  string delivery_id = 1;
+  string shard_id = 2;
+  string batch_key = 3;
+  uint32 batch_generation = 4;
+  string job_id = 5;
+  string binding_id = 6;
+  uint32 chunk_index = 7;
+  uint32 attempt_no = 8;
+  uint64 first_item = 9;
+  uint32 item_count = 10;
+  string reducer_hash = 11;
+  string merge_version = 12;
+  string completion_token_json = 13;
+  string executor_id = 14;
+  string executor_session_id = 15;
+  uint64 capacity_epoch = 16;
+  uint64 expires_at_ms = 17;
+  uint64 estimated_payload_bytes = 18;
+  JobBatchChunkPayloadRef payload_ref = 19;
+  string reducer_plan_json = 20;
+}
+
+message JobBatchItemFailure {
+  uint64 item_ordinal = 1;
+  string error_json = 2;
+}
+
+message JobBatchChunkResult {
+  string delivery_id = 1;
+  string completion_token_json = 2;
+  string batch_key = 3;
+  uint32 batch_generation = 4;
+  uint32 chunk_index = 5;
+  uint32 attempt_no = 6;
+  string reducer_hash = 7;
+  string merge_version = 8;
+  uint32 item_count = 9;
+  uint32 succeeded_count = 10;
+  uint32 failed_count = 11;
+  string reducer_accumulator_json = 12;
+  repeated JobBatchItemFailure inline_failures = 13;
+  string item_sink_ref_json = 14;
+  string result_ref_json = 15;
+}
+
+message JobBatchChunkResultBatchRequest {
+  repeated JobBatchChunkResult results = 1;
+}
+
+message ExecutorHeartbeatRequest {}
+
+message ExecutorStreamRequest {
+  string request_id = 1;
+  oneof request {
+    ExecutorConnectRequest connect = 10;
+    ExecutorCapacityRequest capacity = 11;
+    ExecutorResultRequest result = 12;
+    ExecutorHeartbeatRequest heartbeat = 13;
+    ExecutorResultBatchRequest result_batch = 14;
+    JobBatchChunkResult batch_chunk_result = 15;
+    JobBatchChunkResultBatchRequest batch_chunk_result_batch = 16;
+  }
+}
+
+message ExecutorConnectedResponse {
+  string executor_id = 1;
+  string executor_session_id = 2;
+  uint64 capacity_epoch = 3;
+  uint64 connected_at_ms = 4;
+  uint64 expires_at_ms = 5;
+}
+
+message ExecutorLeaseDelivery {
+  string delivery_id = 1;
+  string shard_id = 2;
+  string intent_id = 3;
+  string job_id = 4;
+  string binding_id = 5;
+  string subject_ref = 6;
+  string payload_json = 7;
+  string payload_hash = 8;
+  string lease_token = 9;
+  uint32 lease_attempt = 10;
+  string executor_id = 11;
+  string executor_session_id = 12;
+  uint64 capacity_epoch = 13;
+  uint64 granted_at_ms = 14;
+  uint64 expires_at_ms = 15;
+  string completion_token_json = 16;
+  uint64 owner_epoch = 17;
+  string manifest_hash = 18;
+  string runtime_owner_id = 19;
+  uint64 topology_version = 20;
+  uint64 routing_epoch = 21;
+  uint64 placement_epoch = 22;
+}
+
+message ExecutorLeaseBatchDelivery {
+  string batch_id = 1;
+  repeated ExecutorLeaseDelivery leases = 2;
+}
+
+message JobBatchChunkLeaseBatchDelivery {
+  string batch_id = 1;
+  repeated JobBatchChunkLease leases = 2;
+}
+
+message ExecutorAckResponse {
+  string request_id = 1;
+  string status = 2;
+  string summary_json = 3;
+}
+
+message ExecutorStreamResponse {
+  string request_id = 1;
+  oneof response {
+    ExecutorConnectedResponse connected = 10;
+    ExecutorLeaseDelivery lease = 11;
+    ExecutorAckResponse ack = 12;
+    RuntimeError error = 13;
+    ExecutorLeaseBatchDelivery lease_batch = 14;
+    JobBatchChunkLease batch_chunk_lease = 15;
+    JobBatchChunkLeaseBatchDelivery batch_chunk_lease_batch = 16;
+  }
+}
+
+message RuntimeError {
+  string code = 1;
+  string message = 2;
+}

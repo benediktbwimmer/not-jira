@@ -1,0 +1,1809 @@
+{
+  "schema_version": 1,
+  "project_id": "prism",
+  "surfaces": [
+    {
+      "app_id": "unblock",
+      "surface_id": "projectRows",
+      "kind": "view",
+      "plan_hash": "6d49cc270d0fb11e",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Project",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Project",
+          "fields": [
+            "archived_at",
+            "created_at",
+            "description",
+            "id",
+            "name",
+            "updated_at"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.projectRows",
+        "plan_hash": "a597d085fc9dbb75",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.projectRows",
+          "expression_hash": "820ca4b1962aa2f5",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskRows",
+      "kind": "view",
+      "plan_hash": "f821eff1042911da",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": [
+            "archived_at",
+            "completion_bar",
+            "created_at",
+            "description",
+            "finished_at",
+            "id",
+            "lifecycle",
+            "priority",
+            "project_id",
+            "size",
+            "source_anchor",
+            "source_doc",
+            "source_line",
+            "source_section",
+            "source_text",
+            "started_at",
+            "title",
+            "updated_at",
+            "version"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskRows",
+        "plan_hash": "96e17c8aabeae58b",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskRows",
+          "expression_hash": "e59a1ce1d4eec805",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskLabelRows",
+      "kind": "view",
+      "plan_hash": "2fd44d2eeb1405a8",
+      "dependencies": [
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.label"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskLabelRows",
+        "plan_hash": "580c82d6fec74797",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskLabelRows",
+          "expression_hash": "0e1715e9bc6729ca",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "commentRows",
+      "kind": "view",
+      "plan_hash": "e6507bd514cc49d1",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Comment",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Comment",
+          "fields": [
+            "actor",
+            "archived_at",
+            "body",
+            "created_at",
+            "id",
+            "machine",
+            "project_id",
+            "task_id",
+            "updated_at"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.commentRows",
+        "plan_hash": "9ee392456c21320e",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.commentRows",
+          "expression_hash": "3934810b906e46a7",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "trackRows",
+      "kind": "view",
+      "plan_hash": "00d596f2e32aaafa",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Track",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Track",
+          "fields": [
+            "actor",
+            "archived_at",
+            "created_at",
+            "id",
+            "machine",
+            "name",
+            "project_id",
+            "updated_at"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.trackRows",
+        "plan_hash": "9ee8c3940c8dfe91",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.trackRows",
+          "expression_hash": "a7c5bd39af0a8375",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "instructionRows",
+      "kind": "view",
+      "plan_hash": "896ce55c1ea6f44e",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Instruction",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Instruction",
+          "fields": [
+            "archived_at",
+            "body",
+            "created_at",
+            "enabled",
+            "id",
+            "name",
+            "project_id",
+            "selector_text",
+            "updated_at"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.instructionRows",
+        "plan_hash": "50d0c28ac9ea2315",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.instructionRows",
+          "expression_hash": "e57d45cbfc18ad59",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "savedSelectorRows",
+      "kind": "view",
+      "plan_hash": "7264a9b9efa3aa48",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "SavedSelector",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "SavedSelector",
+          "fields": [
+            "archived_at",
+            "created_at",
+            "id",
+            "kind",
+            "name",
+            "project_id",
+            "selector_text",
+            "updated_at"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.savedSelectorRows",
+        "plan_hash": "e8948f10da25ab45",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.savedSelectorRows",
+          "expression_hash": "f64fbeb5375606ff",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "activityRows",
+      "kind": "view",
+      "plan_hash": "843284dfd73e6e49",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "ActivityEvent",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "ActivityEvent",
+          "fields": [
+            "actor",
+            "created_at",
+            "data",
+            "id",
+            "machine",
+            "message",
+            "project_id",
+            "subject",
+            "subject_id",
+            "type"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.activityRows",
+        "plan_hash": "390c017319f89538",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.activityRows",
+          "expression_hash": "1d1409696356fabb",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskDependencyRows",
+      "kind": "view",
+      "plan_hash": "a5d3ecc777426d94",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": [
+            "created_at",
+            "from_id",
+            "project_id",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskDependencyRows",
+        "plan_hash": "b53941ac7765d106",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskDependencyRows",
+          "expression_hash": "d49fe0a0c0552e0a",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskHierarchyRows",
+      "kind": "view",
+      "plan_hash": "3d7bc536919bbe51",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": [
+            "created_at",
+            "from_id",
+            "project_id",
+            "sort_key",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskHierarchyRows",
+        "plan_hash": "1e349c98ae93f762",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskHierarchyRows",
+          "expression_hash": "5f9e8db856eaf37b",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskAssignmentRows",
+      "kind": "view",
+      "plan_hash": "049c2b676330a7f3",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskAssignedToTrack",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskAssignedToTrack",
+          "fields": [
+            "assigned_at",
+            "from_id",
+            "position",
+            "project_id",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskAssignmentRows",
+        "plan_hash": "1d461ca054e9d6f5",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskAssignmentRows",
+          "expression_hash": "1e1e244b220bc0c6",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskDependencyClosure",
+      "kind": "view",
+      "plan_hash": "41260b21c7b68830",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "generated",
+        "generator": "runtime_v2.graph.transitive_relation",
+        "parameters": {
+          "cycle_policy": "reject",
+          "derivation_id": "unblock.taskDependencyClosure",
+          "direction": "forward",
+          "max_depth": "64",
+          "relation": "TaskDependsOnTask",
+          "scope_kind": "constant",
+          "scope_value": "global",
+          "sources": "[{\"relation\":\"TaskDependsOnTask\",\"direction\":\"forward\",\"scope_kind\":\"relation_field\",\"scope_value\":\"project_id\"},{\"relation\":\"TaskContainsTask\",\"direction\":\"forward\",\"scope_kind\":\"relation_field\",\"scope_value\":\"project_id\"}]"
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "explicitDependencyClosure",
+      "kind": "view",
+      "plan_hash": "a593d60b8f0b49f8",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "generated",
+        "generator": "runtime_v2.graph.transitive_relation",
+        "parameters": {
+          "cycle_policy": "reject",
+          "derivation_id": "unblock.explicitDependencyClosure",
+          "direction": "forward",
+          "max_depth": "64",
+          "relation": "TaskDependsOnTask",
+          "scope_kind": "relation_field",
+          "scope_value": "project_id",
+          "sources": "[{\"relation\":\"TaskDependsOnTask\",\"direction\":\"forward\",\"scope_kind\":\"relation_field\",\"scope_value\":\"project_id\"}]"
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "hierarchyClosure",
+      "kind": "view",
+      "plan_hash": "5202684b78aacf67",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": []
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "generated",
+        "generator": "runtime_v2.graph.transitive_relation",
+        "parameters": {
+          "cycle_policy": "reject",
+          "derivation_id": "unblock.hierarchyClosure",
+          "direction": "forward",
+          "max_depth": "64",
+          "relation": "TaskContainsTask",
+          "scope_kind": "relation_field",
+          "scope_value": "project_id",
+          "sources": "[{\"relation\":\"TaskContainsTask\",\"direction\":\"forward\",\"scope_kind\":\"relation_field\",\"scope_value\":\"project_id\"}]"
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "directDependencySummary",
+      "kind": "view",
+      "plan_hash": "e6a77a33b58bb0ca",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": [
+            "from_id",
+            "project_id",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.directDependencySummary",
+        "plan_hash": "c44d201448c986a7",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.directDependencySummary",
+          "expression_hash": "f572dff8c7eedff6",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "directDependentSummary",
+      "kind": "view",
+      "plan_hash": "52258e47292b7aa2",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": [
+            "from_id",
+            "project_id",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.directDependentSummary",
+        "plan_hash": "8d6aaf9c9190e9b4",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.directDependentSummary",
+          "expression_hash": "5faa76019168daa8",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "unfinishedDirectDependencySummary",
+      "kind": "view",
+      "plan_hash": "c873cdba6202cfbf",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskDependsOnTask",
+          "fields": []
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.unfinishedDirectDependencySummary",
+        "plan_hash": "37cbb2c9d408fe21",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.unfinishedDirectDependencySummary",
+          "expression_hash": "0f63eefa7b5027da",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskDependencySummary",
+      "kind": "view",
+      "plan_hash": "29813a5925fc408b",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskDependencyClosure"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskDependencySummary",
+        "plan_hash": "731a42fcccf1f18f",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskDependencySummary",
+          "expression_hash": "71684e841f594ef0",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskUnblockSummary",
+      "kind": "view",
+      "plan_hash": "5918fa4dfda7d760",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskDependencyClosure"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskUnblockSummary",
+        "plan_hash": "b30b94d66b4a83b0",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskUnblockSummary",
+          "expression_hash": "3a5565ebe62025e4",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "childSummary",
+      "kind": "view",
+      "plan_hash": "33adce414be63e16",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": [
+            "from_id",
+            "project_id",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.childSummary",
+        "plan_hash": "ef5259f7d3d9e2b6",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.childSummary",
+          "expression_hash": "ef7afece43d90e9a",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "descendantSummary",
+      "kind": "view",
+      "plan_hash": "d6d333873daeff2a",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "hierarchyClosure"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.descendantSummary",
+        "plan_hash": "23237fdd5da18c6a",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.descendantSummary",
+          "expression_hash": "21d08e39cfd5cbc0",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "unfinishedDescendantSummary",
+      "kind": "view",
+      "plan_hash": "ddcae086fb89a56f",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "hierarchyClosure"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.unfinishedDescendantSummary",
+        "plan_hash": "6407245b48297a3f",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.unfinishedDescendantSummary",
+          "expression_hash": "1e6725ae089d6770",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "parentSummary",
+      "kind": "view",
+      "plan_hash": "e2b85101ae32c085",
+      "dependencies": [
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskContainsTask",
+          "fields": [
+            "from_id",
+            "project_id",
+            "sort_key",
+            "to_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.parentSummary",
+        "plan_hash": "310ec1e4a32a23d6",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.parentSummary",
+          "expression_hash": "76a2fdd3fa11b66b",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "commentSummary",
+      "kind": "view",
+      "plan_hash": "0a2fd11cf0c016d8",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Comment",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Comment",
+          "fields": [
+            "actor",
+            "archived_at",
+            "created_at",
+            "machine",
+            "project_id",
+            "task_id"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.commentSummary",
+        "plan_hash": "e0c9f9194f3de20c",
+        "required_features": [
+          "query_ir.aggregates",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.commentSummary",
+          "expression_hash": "5aeae6159e6d3aae",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "assignmentSummary",
+      "kind": "view",
+      "plan_hash": "1e49ae9362efae05",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Track",
+          "fields": []
+        },
+        {
+          "kind": "relation",
+          "app_id": "unblock",
+          "relation": "TaskAssignedToTrack",
+          "fields": []
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.assignmentSummary",
+        "plan_hash": "0ff73ead5d20abda",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.assignmentSummary",
+          "expression_hash": "efaff95373dd6055",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskStatus",
+      "kind": "view",
+      "plan_hash": "099fd2452a659d95",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "unfinishedDirectDependencySummary"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskStatus",
+        "plan_hash": "d83867f49bbe8fc5",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskStatus",
+          "expression_hash": "6b28b986c3c0df5c",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "hierarchyStatus",
+      "kind": "view",
+      "plan_hash": "60fd73628d9f742d",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "descendantSummary"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "unfinishedDescendantSummary"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.hierarchyStatus",
+        "plan_hash": "a5c665b73433b2cf",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.hierarchyStatus",
+          "expression_hash": "791b69f2c1d9ebd7",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskReadModel",
+      "kind": "view",
+      "plan_hash": "2775712a93a863c0",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": []
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskStatus"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskReadModel",
+        "plan_hash": "f8f9ab93ab7d2ef1",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskReadModel",
+          "expression_hash": "e0f9ef8732618754",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskCommentMatcherModel",
+      "kind": "view",
+      "plan_hash": "c717b4491dd74fca",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "commentSummary"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskReadModel"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskCommentMatcherModel",
+        "plan_hash": "e11587fa8a2e346f",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators",
+          "ts_expr.lower_result_literals"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskCommentMatcherModel",
+          "expression_hash": "5cba1df444422fc3",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskAssignmentMatcherModel",
+      "kind": "view",
+      "plan_hash": "849814317765498a",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "assignmentSummary"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskCommentMatcherModel"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskAssignmentMatcherModel",
+        "plan_hash": "ebdbcad2aaebd24a",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskAssignmentMatcherModel",
+          "expression_hash": "ca15af119f44f2cf",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "taskMatcherReadModel",
+      "kind": "view",
+      "plan_hash": "1d195a2d6ceaf9b9",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "hierarchyStatus"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "parentSummary"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskAssignmentMatcherModel"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskDependencySummary"
+        },
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskUnblockSummary"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.taskMatcherReadModel",
+        "plan_hash": "28b7bb2f3aaa2bd2",
+        "required_features": [
+          "query_ir.joins",
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators",
+          "ts_expr.lower_result_literals"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.taskMatcherReadModel",
+          "expression_hash": "7f402eeb31b00735",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "readyTasks",
+      "kind": "view",
+      "plan_hash": "12ff218addbbcedb",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskReadModel"
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.readyTasks",
+        "plan_hash": "57c62ea2a1f6d942",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.readyTasks",
+          "expression_hash": "a72be971b6c0bb5f",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "instructionSelectorCatalog",
+      "kind": "view",
+      "plan_hash": "4548a56bd39514af",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Instruction",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Instruction",
+          "fields": [
+            "body",
+            "id",
+            "project_id",
+            "selector_fragment_hash",
+            "selector_fragment_id",
+            "selector_hash",
+            "selector_text"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.instructionSelectorCatalog",
+        "plan_hash": "c90c55538becc249",
+        "required_features": [
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.instructionSelectorCatalog",
+          "expression_hash": "e9fe18ed3b6e3872",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "savedSelectorCatalog",
+      "kind": "view",
+      "plan_hash": "a13456ce9e6cbb1c",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "SavedSelector",
+          "fields": []
+        },
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "SavedSelector",
+          "fields": [
+            "archived_at",
+            "id",
+            "kind",
+            "name",
+            "project_id",
+            "selector_fragment_hash",
+            "selector_fragment_id",
+            "selector_hash",
+            "selector_text"
+          ]
+        }
+      ],
+      "shard_scope": "global_control_plane",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.savedSelectorCatalog",
+        "plan_hash": "7e5953e41d55c31f",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.savedSelectorCatalog",
+          "expression_hash": "0880c04397dea365",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.ready",
+      "kind": "tag",
+      "plan_hash": "aa11441d2c14d2df",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskStatus"
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.ready"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.ready",
+        "plan_hash": "40bc4b20a3140830",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.ready",
+          "expression_hash": "cccdc0fb1daf43f7",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.blocked",
+      "kind": "tag",
+      "plan_hash": "46f5a19fe15ef7cd",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "taskStatus"
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.blocked"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.blocked",
+        "plan_hash": "04b765e95e2a416a",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.blocked",
+          "expression_hash": "cccdc0fb1daf43f7",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.started",
+      "kind": "tag",
+      "plan_hash": "6ed40e44ead4e4c5",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": [
+            "archived_at",
+            "id",
+            "lifecycle"
+          ]
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.started"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.started",
+        "plan_hash": "251713ae6c80123f",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.started",
+          "expression_hash": "a91c551015aaf019",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.finished",
+      "kind": "tag",
+      "plan_hash": "d025f3e0e3da7cd6",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": [
+            "archived_at",
+            "id",
+            "lifecycle"
+          ]
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.finished"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.finished",
+        "plan_hash": "18c5105d2b3ccd1f",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.finished",
+          "expression_hash": "a91c551015aaf019",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.archived",
+      "kind": "tag",
+      "plan_hash": "2b0612541c91f98b",
+      "dependencies": [
+        {
+          "kind": "object",
+          "app_id": "unblock",
+          "object": "Task",
+          "fields": [
+            "archived_at",
+            "id"
+          ]
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.archived"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.archived",
+        "plan_hash": "bea39a27e0998fac",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.archived",
+          "expression_hash": "a91c551015aaf019",
+          "source_span": null
+        }
+      }
+    },
+    {
+      "app_id": "unblock",
+      "surface_id": "task.blocked_by_children",
+      "kind": "tag",
+      "plan_hash": "2892fccf6adb1a7c",
+      "dependencies": [
+        {
+          "kind": "surface",
+          "app_id": "unblock",
+          "surface": "hierarchyStatus"
+        },
+        {
+          "kind": "tag",
+          "app_id": "unblock",
+          "tag": "task.blocked_by_children"
+        }
+      ],
+      "shard_scope": "subject",
+      "materialized": true,
+      "watchable": false,
+      "implementation": {
+        "kind": "query_ir",
+        "plan_id": "unblock.task.blocked_by_children",
+        "plan_hash": "1de1c54b4b3d898f",
+        "required_features": [
+          "query_ir.predicates",
+          "query_ir.result_shaping",
+          "query_ir.schema",
+          "query_ir.source_scans",
+          "ts_expr.lower_field_access",
+          "ts_expr.lower_operators"
+        ],
+        "source": {
+          "kind": "type_script_expression",
+          "artifact_ref": "unblock.task.blocked_by_children",
+          "expression_hash": "cccdc0fb1daf43f7",
+          "source_span": null
+        }
+      }
+    }
+  ],
+  "materialization_strata": [
+    [
+      "unblock::activityRows",
+      "unblock::assignmentSummary",
+      "unblock::childSummary",
+      "unblock::commentRows",
+      "unblock::commentSummary",
+      "unblock::directDependencySummary",
+      "unblock::directDependentSummary",
+      "unblock::explicitDependencyClosure",
+      "unblock::hierarchyClosure",
+      "unblock::instructionRows",
+      "unblock::instructionSelectorCatalog",
+      "unblock::parentSummary",
+      "unblock::projectRows",
+      "unblock::savedSelectorCatalog",
+      "unblock::savedSelectorRows",
+      "unblock::task.archived",
+      "unblock::task.finished",
+      "unblock::task.started",
+      "unblock::taskAssignmentRows",
+      "unblock::taskDependencyClosure",
+      "unblock::taskDependencyRows",
+      "unblock::taskHierarchyRows",
+      "unblock::taskLabelRows",
+      "unblock::taskRows",
+      "unblock::trackRows",
+      "unblock::unfinishedDirectDependencySummary"
+    ],
+    [
+      "unblock::descendantSummary",
+      "unblock::taskDependencySummary",
+      "unblock::taskStatus",
+      "unblock::taskUnblockSummary",
+      "unblock::unfinishedDescendantSummary"
+    ],
+    [
+      "unblock::hierarchyStatus",
+      "unblock::task.blocked",
+      "unblock::task.ready",
+      "unblock::taskReadModel"
+    ],
+    [
+      "unblock::readyTasks",
+      "unblock::task.blocked_by_children",
+      "unblock::taskCommentMatcherModel"
+    ],
+    [
+      "unblock::taskAssignmentMatcherModel"
+    ],
+    [
+      "unblock::taskMatcherReadModel"
+    ]
+  ]
+}

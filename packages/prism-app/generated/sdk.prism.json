@@ -1,0 +1,5056 @@
+{
+  "schema_version": 1,
+  "project_id": "prism",
+  "manifest_hash": "3b6ea961413d1e00",
+  "runtime_protocol": {
+    "kind": "protobuf_grpc",
+    "package": "prism.runtime.v1",
+    "service": "RuntimeService",
+    "proto_artifact": "prism/runtime/v1/runtime.proto",
+    "methods": [
+      "Health",
+      "ActiveManifest",
+      "ExecuteCommand",
+      "Query",
+      "ReadObject",
+      "ReadRelation",
+      "ReadSubjectTags",
+      "FindSubjectsByTag",
+      "ReadMaterializedSurface",
+      "WatchObjectProperty",
+      "WatchObjectProperties",
+      "WatchObjectPropertiesOnce",
+      "BatchRuntime",
+      "StreamRuntime"
+    ]
+  },
+  "apps": [
+    {
+      "id": "unblock",
+      "version": "0.3.0"
+    }
+  ],
+  "objects": [
+    {
+      "app_id": "unblock",
+      "name": "Project",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "description",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "Task",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "title",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "description",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "lifecycle",
+          "ty": {
+            "kind": "enum",
+            "name": "Lifecycle",
+            "values": [
+              "open",
+              "started",
+              "finished"
+            ]
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "priority",
+          "ty": {
+            "kind": "i32"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "size",
+          "ty": {
+            "kind": "enum",
+            "name": "TaskSize",
+            "values": [
+              "XS",
+              "S",
+              "M",
+              "L",
+              "XL"
+            ]
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "source_doc",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "source_section",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "source_anchor",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "source_line",
+          "ty": {
+            "kind": "i32"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "source_text",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "completion_bar",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "started_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "finished_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "version",
+          "ty": {
+            "kind": "i64"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "Track",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "machine",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "actor",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "Comment",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "task_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "machine",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "actor",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "body",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "Instruction",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_text",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_hash",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_fragment_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_fragment_hash",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "body",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "enabled",
+          "ty": {
+            "kind": "bool"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "SavedSelector",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "kind",
+          "ty": {
+            "kind": "enum",
+            "name": "SelectorKind",
+            "values": [
+              "instruction",
+              "view",
+              "feed"
+            ]
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "name",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_text",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_hash",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_fragment_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "selector_fragment_hash",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "updated_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "ExternalIssue",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "provider",
+          "ty": {
+            "kind": "enum",
+            "name": "ExternalProvider",
+            "values": [
+              "github",
+              "jira",
+              "linear",
+              "asana",
+              "trello",
+              "manual"
+            ]
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "external_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "external_key",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "url",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "title",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "state",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "payload",
+          "ty": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "synced_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "archived_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    },
+    {
+      "app_id": "unblock",
+      "name": "ActivityEvent",
+      "key_fields": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "project_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "type",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "subject",
+          "ty": {
+            "kind": "enum",
+            "name": "ActivitySubject",
+            "values": [
+              "project",
+              "task",
+              "comment",
+              "tag",
+              "track",
+              "instruction",
+              "view",
+              "feed",
+              "external_issue",
+              "import",
+              "export",
+              "system"
+            ]
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "subject_id",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": true,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "message",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "data",
+          "ty": {
+            "kind": "json"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "machine",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "actor",
+          "ty": {
+            "kind": "text"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        },
+        {
+          "name": "created_at",
+          "ty": {
+            "kind": "timestamp"
+          },
+          "nullable": false,
+          "derived_by": null,
+          "indexed": false
+        }
+      ]
+    }
+  ],
+  "commands": [],
+  "jobs": [],
+  "generated_sdks": {
+    "typescript_runtime": "typescript/app-sdk.ts",
+    "typescript_execution": "typescript/execution.ts",
+    "rust_execution": "rust/execution.rs",
+    "raw_transport": "typescript/runtime.ts"
+  },
+  "workflows": [],
+  "runtime_config": {
+    "workflow_budgets": []
+  },
+  "storage_projections": {
+    "workflow_metadata_sql": []
+  },
+  "queries": [
+    {
+      "app_id": "unblock",
+      "id": "projectRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "title",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "lifecycle",
+            "ty": {
+              "kind": "enum",
+              "name": "Lifecycle",
+              "values": [
+                "open",
+                "started",
+                "finished"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "size",
+            "ty": {
+              "kind": "enum",
+              "name": "TaskSize",
+              "values": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_doc",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_section",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_anchor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_line",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "completion_bar",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "started_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "finished_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "version",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskLabelRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "label_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "color",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "sort_order",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            },
+            {
+              "kind": "field",
+              "field": "label_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "commentRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "body",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "trackRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "instructionRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "body",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "enabled",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "savedSelectorRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "kind",
+            "ty": {
+              "kind": "enum",
+              "name": "SelectorKind",
+              "values": [
+                "instruction",
+                "view",
+                "feed"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "kind"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "activityRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "type",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "subject",
+            "ty": {
+              "kind": "enum",
+              "name": "ActivitySubject",
+              "values": [
+                "project",
+                "task",
+                "comment",
+                "tag",
+                "track",
+                "instruction",
+                "view",
+                "feed",
+                "external_issue",
+                "import",
+                "export",
+                "system"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "subject_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "message",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "data",
+            "ty": {
+              "kind": "json"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskDependencyRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "depends_on_task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            },
+            {
+              "kind": "field",
+              "field": "depends_on_task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskHierarchyRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "parent_task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "sort_key",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskAssignmentRows",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "track_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "position",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskDependencyClosure",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "scope_key",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "min_depth",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "path_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            },
+            {
+              "kind": "field",
+              "field": "from_kind"
+            },
+            {
+              "kind": "field",
+              "field": "from_id"
+            },
+            {
+              "kind": "field",
+              "field": "to_kind"
+            },
+            {
+              "kind": "field",
+              "field": "to_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "explicitDependencyClosure",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "scope_key",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "min_depth",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "path_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            },
+            {
+              "kind": "field",
+              "field": "from_kind"
+            },
+            {
+              "kind": "field",
+              "field": "from_id"
+            },
+            {
+              "kind": "field",
+              "field": "to_kind"
+            },
+            {
+              "kind": "field",
+              "field": "to_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "hierarchyClosure",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "scope_key",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "from_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_kind",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "to_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "min_depth",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "path_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            },
+            {
+              "kind": "field",
+              "field": "from_kind"
+            },
+            {
+              "kind": "field",
+              "field": "from_id"
+            },
+            {
+              "kind": "field",
+              "field": "to_kind"
+            },
+            {
+              "kind": "field",
+              "field": "to_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "scope_key"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "directDependencySummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "direct_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "direct_dependency_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "directDependentSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "direct_dependent_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "direct_dependent_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "unfinishedDirectDependencySummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskDependencySummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "dependency_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskUnblockSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unblocks_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unblocks_task_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "childSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "children_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "child_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "descendantSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "descendant_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "unfinishedDescendantSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_descendant_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "parentSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "parent_task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "sort_key",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "commentSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_authors",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "last_comment_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "assignmentSummary",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "track_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "position",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskStatus",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "computed_status",
+            "ty": {
+              "kind": "enum",
+              "name": "ComputedStatus",
+              "values": [
+                "ready",
+                "blocked",
+                "started",
+                "finished",
+                "archived"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "ready",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "blocked",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "hierarchyStatus",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "rollup_status",
+            "ty": {
+              "kind": "enum",
+              "name": "RollupStatus",
+              "values": [
+                "leaf",
+                "complete",
+                "blocked_by_children"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskReadModel",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "title",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "lifecycle",
+            "ty": {
+              "kind": "enum",
+              "name": "Lifecycle",
+              "values": [
+                "open",
+                "started",
+                "finished"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "size",
+            "ty": {
+              "kind": "enum",
+              "name": "TaskSize",
+              "values": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_doc",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_section",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_anchor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_line",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "completion_bar",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "started_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "finished_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "version",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "computed_status",
+            "ty": {
+              "kind": "enum",
+              "name": "ComputedStatus",
+              "values": [
+                "ready",
+                "blocked",
+                "started",
+                "finished",
+                "archived"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "ready",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "blocked",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskCommentMatcherModel",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "title",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "lifecycle",
+            "ty": {
+              "kind": "enum",
+              "name": "Lifecycle",
+              "values": [
+                "open",
+                "started",
+                "finished"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "size",
+            "ty": {
+              "kind": "enum",
+              "name": "TaskSize",
+              "values": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_doc",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_section",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_anchor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_line",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "completion_bar",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "started_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "finished_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "version",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "computed_status",
+            "ty": {
+              "kind": "enum",
+              "name": "ComputedStatus",
+              "values": [
+                "ready",
+                "blocked",
+                "started",
+                "finished",
+                "archived"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "ready",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "blocked",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_authors",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "last_comment_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskAssignmentMatcherModel",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "title",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "lifecycle",
+            "ty": {
+              "kind": "enum",
+              "name": "Lifecycle",
+              "values": [
+                "open",
+                "started",
+                "finished"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "size",
+            "ty": {
+              "kind": "enum",
+              "name": "TaskSize",
+              "values": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_doc",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_section",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_anchor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_line",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "completion_bar",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "started_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "finished_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "version",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "computed_status",
+            "ty": {
+              "kind": "enum",
+              "name": "ComputedStatus",
+              "values": [
+                "ready",
+                "blocked",
+                "started",
+                "finished",
+                "archived"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "ready",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "blocked",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_authors",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "last_comment_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_track_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_position",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "taskMatcherReadModel",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "title",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "description",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "lifecycle",
+            "ty": {
+              "kind": "enum",
+              "name": "Lifecycle",
+              "values": [
+                "open",
+                "started",
+                "finished"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "size",
+            "ty": {
+              "kind": "enum",
+              "name": "TaskSize",
+              "values": [
+                "XS",
+                "S",
+                "M",
+                "L",
+                "XL"
+              ]
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_doc",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_section",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_anchor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_line",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "source_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "completion_bar",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "created_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "started_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "finished_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "archived_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "version",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "computed_status",
+            "ty": {
+              "kind": "enum",
+              "name": "ComputedStatus",
+              "values": [
+                "ready",
+                "blocked",
+                "started",
+                "finished",
+                "archived"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "ready",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "blocked",
+            "ty": {
+              "kind": "bool"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "comment_authors",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "last_comment_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_track_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_machine",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_actor",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "assigned_position",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "dependency_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "dependency_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unblocks_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unblocks_task_ids",
+            "ty": {
+              "kind": "array",
+              "item": {
+                "kind": "text"
+              }
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "parent_task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "unfinished_descendants_count",
+            "ty": {
+              "kind": "i64"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "rollup_status",
+            "ty": {
+              "kind": "enum",
+              "name": "RollupStatus",
+              "values": [
+                "leaf",
+                "complete",
+                "blocked_by_children"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "readyTasks",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "task_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "priority",
+            "ty": {
+              "kind": "i32"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "updated_at",
+            "ty": {
+              "kind": "timestamp"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "task_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "instructionSelectorCatalog",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "instruction_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_hash",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_fragment_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_fragment_hash",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "body",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "instruction_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    },
+    {
+      "app_id": "unblock",
+      "id": "savedSelectorCatalog",
+      "kind": "view",
+      "input": [],
+      "output": {
+        "kind": "rows",
+        "fields": [
+          {
+            "name": "project_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "kind",
+            "ty": {
+              "kind": "enum",
+              "name": "SelectorKind",
+              "values": [
+                "instruction",
+                "view",
+                "feed"
+              ]
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "name",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_text",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_hash",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": false,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_fragment_id",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          },
+          {
+            "name": "selector_fragment_hash",
+            "ty": {
+              "kind": "text"
+            },
+            "nullable": true,
+            "derived_by": null,
+            "indexed": false
+          }
+        ],
+        "identity": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            },
+            {
+              "kind": "field",
+              "field": "selector_id"
+            }
+          ]
+        },
+        "replacement_scope": {
+          "parts": [
+            {
+              "kind": "field",
+              "field": "project_id"
+            }
+          ]
+        }
+      },
+      "watchable": false
+    }
+  ],
+  "watches": []
+}

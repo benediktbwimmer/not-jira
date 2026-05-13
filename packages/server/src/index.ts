@@ -14,6 +14,7 @@ import {
   readUnblockConfig,
   updateUnblockConfig,
   type ComputedStatus,
+  type AppStore,
   type Lifecycle,
   type Priority,
   type TaskListFilters,
@@ -21,9 +22,13 @@ import {
   type TaskSort
 } from "@unblock/core";
 
+export type UnblockBackend = "sqlite" | "prism";
+
 export interface ServerOptions {
+  backend?: UnblockBackend | undefined;
   databasePath?: string | undefined;
   configPath?: string | undefined;
+  storeFactory?: (() => AppStore | Promise<AppStore>) | undefined;
 }
 
 export function createApp(options: ServerOptions = {}) {
@@ -53,7 +58,7 @@ export function createApp(options: ServerOptions = {}) {
   });
 
   app.use("/api/*", async (c, next) => {
-    const store = createSqliteStore(defined({ databasePath: options.databasePath, autoMigrate: true }));
+    const store = await openStore(options);
     c.set("services", createServices(store));
     c.set("store", store);
     c.set("configPath", options.configPath ?? process.env.UNBLOCK_CONFIG ?? defaultUnblockConfigPath());
@@ -299,9 +304,64 @@ function requireProjectId(c: Context): string {
 declare module "hono" {
   interface ContextVariableMap {
     services: ReturnType<typeof createServices>;
-    store: ReturnType<typeof createSqliteStore>;
+    store: AppStore;
     configPath: string;
   }
+}
+
+async function openStore(options: ServerOptions): Promise<AppStore> {
+  if (options.storeFactory) {
+    return await options.storeFactory();
+  }
+
+  const backend = resolveBackend(options.backend ?? process.env.UNBLOCK_BACKEND);
+  if (backend === "sqlite") {
+    return createSqliteStore(defined({ databasePath: options.databasePath, autoMigrate: true }));
+  }
+
+  const moduleName = process.env.UNBLOCK_PRISM_STORE_MODULE ?? "@unblock/prism-app/store";
+  try {
+    const storeModule = await import(moduleName) as {
+      createPrismStore?: (options: {
+        endpoint?: string;
+        projectId?: string;
+        shardId?: string;
+        actorId?: string;
+      }) => AppStore | Promise<AppStore>;
+    };
+    if (!storeModule.createPrismStore) {
+      throw new Error(`${moduleName} does not export createPrismStore`);
+    }
+    const prismOptions: {
+      endpoint?: string;
+      projectId?: string;
+      shardId?: string;
+      actorId?: string;
+    } = {};
+    if (process.env.UNBLOCK_PRISM_ENDPOINT) prismOptions.endpoint = process.env.UNBLOCK_PRISM_ENDPOINT;
+    if (process.env.UNBLOCK_PRISM_PROJECT_ID) prismOptions.projectId = process.env.UNBLOCK_PRISM_PROJECT_ID;
+    const prismShardId = process.env.UNBLOCK_PRISM_SHARD_ID ?? process.env.UNBLOCK_TENANT_ID;
+    if (prismShardId) prismOptions.shardId = prismShardId;
+    if (process.env.UNBLOCK_PRISM_ACTOR_ID) prismOptions.actorId = process.env.UNBLOCK_PRISM_ACTOR_ID;
+    return await storeModule.createPrismStore(prismOptions);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new UnblockError(
+      "validation",
+      `UNBLOCK_BACKEND=prism requires a Prism AppStore module. Set UNBLOCK_PRISM_STORE_MODULE or pass ServerOptions.storeFactory. Cause: ${message}`
+    );
+  }
+}
+
+function resolveBackend(value: string | undefined): UnblockBackend {
+  const normalized = (value ?? "sqlite").trim().toLowerCase();
+  if (normalized === "sqlite" || normalized === "local") {
+    return "sqlite";
+  }
+  if (normalized === "prism" || normalized === "hosted") {
+    return "prism";
+  }
+  throw new UnblockError("validation", `Unsupported UNBLOCK_BACKEND: ${value}`);
 }
 
 function parseOptionalPriority(value: string | undefined): Priority | undefined {

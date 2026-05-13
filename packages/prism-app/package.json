@@ -1,0 +1,31 @@
+{
+  "name": "@unblock/prism-app",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/store.js",
+  "types": "dist/store.d.ts",
+  "exports": {
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    },
+    "./matcher-fragment": {
+      "types": "./dist/matcher-fragment.d.ts",
+      "default": "./dist/matcher-fragment.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "npm run build -w @unblock/core",
+    "build": "tsc -p tsconfig.json",
+    "collect": "deno run --allow-read --allow-env ../../../prism-new2/packages/prism-authoring/collector.ts .",
+    "compile": "cd ../../../prism-new2 && cargo run -p prism-cli --bin prism -- compile ../unblock/packages/prism-app -o ../unblock/packages/prism-app/generated",
+    "check": "deno check src/app.ts && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.1",
+    "@unblock/core": "0.1.0"
+  }
+}

@@ -1344,7 +1344,11 @@ export class QueryService {
 
     views = this.applyFilters(views, filters);
     if (filters.where?.trim()) {
-      const queryMatches = new Set(matchMatcherQuery(filters.where, views, activeDependencies).map((match) => match.task.id));
+      const { where: _where, ...baseFilters } = filters;
+      const nativeTaskIds = this.store.matcher
+        ? await this.store.matcher.matchTaskIds(this.projectId, filters.where, baseFilters)
+        : null;
+      const queryMatches = new Set(nativeTaskIds ?? matchMatcherQuery(filters.where, views, activeDependencies).map((match) => match.task.id));
       views = views.filter((task) => queryMatches.has(task.id));
     }
     return sortTaskViews(views, filters.sort);
@@ -1404,6 +1408,33 @@ export class QueryService {
       this.list({ includeArchived: true, includeFinished: true }),
       this.store.dependencies.list(this.projectId)
     ]);
+    if (this.store.matcher) {
+      const taskById = new Map(tasks.map((task) => [task.id, task]));
+      const taskIds = await this.store.matcher.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true });
+      return {
+        ok: true,
+        query,
+        errors: [],
+        matches: taskIds
+          .map((taskId) => taskById.get(taskId))
+          .filter((task): task is TaskView => Boolean(task))
+          .map((task) => ({
+            instruction: {
+              projectId: this.projectId,
+              id: "__preview__",
+              name: "Preview",
+              query,
+              body: "",
+              enabled: true,
+              createdAt: nowIso(),
+              updatedAt: nowIso(),
+              archivedAt: null
+            },
+            task,
+            reasons: ["matched by Prism selector fragment"]
+          }))
+      };
+    }
     return {
       ok: true,
       query,
@@ -1434,6 +1465,16 @@ export class QueryService {
     ]);
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     const matches: InstructionMatch[] = [];
+    if (this.store.matcher) {
+      const taskById = new Map(tasks.map((task) => [task.id, task]));
+      for (const instruction of enabled) {
+        for (const taskId of await this.store.matcher.matchTaskIds(this.projectId, instruction.query, { includeArchived: true, includeFinished: true })) {
+          const task = taskById.get(taskId);
+          if (task) matches.push({ instruction, task, reasons: ["matched by Prism selector fragment"] });
+        }
+      }
+      return matches.sort((a, b) => a.instruction.name.localeCompare(b.instruction.name) || a.task.id.localeCompare(b.task.id));
+    }
     for (const instruction of enabled) {
       for (const match of matchMatcherQuery(instruction.query, tasks, dependencies)) {
         matches.push({ instruction, task: match.task, reasons: match.reasons });

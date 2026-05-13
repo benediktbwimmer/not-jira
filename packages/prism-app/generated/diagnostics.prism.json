@@ -1,0 +1,42 @@
+{
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "TY003",
+      "message": "object `ExternalIssue` field `payload` uses untyped JSON; hot-state queries should prefer typed fields",
+      "labels": [
+        {
+          "span": {
+            "file": null,
+            "start_line": null,
+            "start_column": null,
+            "end_line": null,
+            "end_column": null
+          },
+          "message": "object `ExternalIssue` field `payload` uses untyped JSON; hot-state queries should prefer typed fields"
+        }
+      ],
+      "notes": [],
+      "help": []
+    },
+    {
+      "severity": "warning",
+      "code": "TY003",
+      "message": "object `ActivityEvent` field `data` uses untyped JSON; hot-state queries should prefer typed fields",
+      "labels": [
+        {
+          "span": {
+            "file": null,
+            "start_line": null,
+            "start_column": null,
+            "end_line": null,
+            "end_column": null
+          },
+          "message": "object `ActivityEvent` field `data` uses untyped JSON; hot-state queries should prefer typed fields"
+        }
+      ],
+      "notes": [],
+      "help": []
+    }
+  ]
+}

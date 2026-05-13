@@ -9,6 +9,7 @@ import type {
   Tag,
   Task,
   TaskTag,
+  TaskListFilters,
   Track,
   TrackAssignment,
   Instruction
@@ -100,6 +101,10 @@ export interface MigrationRepository {
   markApplied(migration: Migration): Promise<void>;
 }
 
+export interface MatcherQueryRepository {
+  matchTaskIds(projectId: string, query: string, filters?: Omit<TaskListFilters, "where">): Promise<string[]>;
+}
+
 export interface RepositorySet {
   projects: ProjectRepository;
   tasks: TaskRepository;
@@ -115,6 +120,7 @@ export interface RepositorySet {
 }
 
 export interface AppStore extends RepositorySet {
+  matcher?: MatcherQueryRepository;
   transaction<T>(fn: (repos: RepositorySet) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }

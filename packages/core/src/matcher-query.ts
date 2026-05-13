@@ -9,7 +9,7 @@ interface Token {
   offset: number;
 }
 
-type QueryNode =
+export type QueryNode =
   | { type: "and"; nodes: QueryNode[] }
   | { type: "or"; nodes: QueryNode[] }
   | { type: "not"; node: QueryNode }
@@ -43,10 +43,10 @@ const MATCHER_QUERY_EXAMPLES = [
   "created = 2026-05-10"
 ] as const;
 
-type FieldName = typeof FIELD_NAMES[number];
-type CompareOp = typeof COMPARE_OPERATORS[number];
-type FieldOperator = typeof FIELD_OPERATORS[number];
-type GraphVerb = typeof GRAPH_VERBS[number];
+export type FieldName = typeof FIELD_NAMES[number];
+export type CompareOp = typeof COMPARE_OPERATORS[number];
+export type FieldOperator = typeof FIELD_OPERATORS[number];
+export type GraphVerb = typeof GRAPH_VERBS[number];
 
 export interface MatcherQueryGrammar {
   fields: FieldName[];
@@ -61,14 +61,14 @@ export interface MatcherQueryGrammar {
   notes: string[];
 }
 
-interface FieldPredicate {
+export interface FieldPredicate {
   type: "field";
   field: FieldName;
   op: CompareOp | "in" | "not in";
   values: string[];
 }
 
-interface TimePredicate {
+export interface TimePredicate {
   type: "time";
   field: TimeFieldName;
   op: CompareOp | "is empty" | "is not empty";
@@ -81,15 +81,15 @@ interface CommentPredicate {
   value: string | TimeExpression;
 }
 
-type TimeFieldName = typeof TIME_FIELDS[number];
-type TimeExpression =
+export type TimeFieldName = typeof TIME_FIELDS[number];
+export type TimeExpression =
   | { type: "absolute"; value: string; dateOnly: boolean }
   | { type: "now" }
   | { type: "today" }
   | { type: "relative"; anchor: "now"; amount: number; unit: TimeUnit };
-type TimeUnit = "m" | "h" | "d" | "w";
+export type TimeUnit = "m" | "h" | "d" | "w";
 
-interface GraphPredicate {
+export interface GraphPredicate {
   type: "graph";
   verb: GraphVerb;
   targetId: string | null;
@@ -97,7 +97,7 @@ interface GraphPredicate {
   depth?: { op: CompareOp; value: number };
 }
 
-interface HierarchyPredicate {
+export interface HierarchyPredicate {
   type: "hierarchy";
   relation: "descendant of";
   taskId: string;
