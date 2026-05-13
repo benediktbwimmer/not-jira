@@ -75,9 +75,9 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
         on: (joinIndex, edge) => {
           const task = taskPathForJoin(joinIndex);
           if (predicate.verb === "depends on") {
-            return `${task}.id === ${edge}.from_id && ${task}.project_id === ${edge}.scope_key && ${edge}.to_id === ${literal(targetId)}`;
+            return `${task}.id === ${edge}.from_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.to_id === ${literal(targetId)}`;
           }
-          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_id === ${literal(targetId)}`;
+          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literal(targetId)}`;
         },
       });
       return joinToken(index);
@@ -88,7 +88,7 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
         importName: "hierarchyClosure",
         on: (joinIndex, edge) => {
           const task = taskPathForJoin(joinIndex);
-          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_id === ${literal(predicate.taskId)}`;
+          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literal(predicate.taskId)}`;
         },
       });
       return joinToken(index);

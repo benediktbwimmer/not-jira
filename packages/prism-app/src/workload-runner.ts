@@ -190,8 +190,11 @@ async function main(): Promise<void> {
         tags.push(assignment.tagId);
         tagsByTask.set(assignment.taskId, tags);
       }
-      await parallelMap([...tagsByTask], options.concurrency, async ([taskId, tagIds]) => {
-        await services.tags.assign(taskId, tagIds);
+      const chunks = chunked([...tagsByTask], Math.max(1, Math.ceil(tagsByTask.size / options.concurrency)));
+      await parallelMap(chunks, options.concurrency, async (chunk) => {
+        await services.tags.assignMany(
+          chunk.map(([taskId, tagIds]) => ({ taskId, tagIdsOrNames: tagIds })),
+        );
       });
       await waitFor("task tags visible", options, async () =>
         (await store!.tags.listTaskTags(options.unblockProjectId)).length >= workload.taskTags.length
@@ -319,8 +322,8 @@ function startPrismServe(options: RunnerOptions): PrismProcess {
     "serve",
     "--roles",
     "all",
-    "--runtime-backend",
-    "runtime-v2",
+    "--runtime-v2-storage-backend",
+    "postgres",
     "--bind",
     options.bind,
     "--runtime-advertised-grpc-addr",
@@ -435,6 +438,14 @@ async function parallelMap<T>(items: T[], concurrency: number, fn: (item: T, ind
       await fn(items[index]!, index);
     }
   }));
+}
+
+function chunked<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function stopProcess(child: PrismProcess): Promise<void> {
