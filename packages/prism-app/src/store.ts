@@ -254,6 +254,8 @@ export class PrismStore implements AppStore {
   private readonly transactionOperations = new AsyncLocalStorage<PrismMutation[]>();
   private readonly matcherFragments = new Map<string, Promise<AdmittedMatcherFragment>>();
   private readonly matcherResultCache = new Map<string, Promise<string[]>>();
+  private readonly rowCache = new Map<string, Promise<Record<string, unknown>[]>>();
+  private readonly tagReadCache = new Map<string, Promise<PrismTagAssignment[]>>();
 
   constructor(private readonly options: {
     client: PrismRuntimeClient;
@@ -298,7 +300,13 @@ export class PrismStore implements AppStore {
   }
 
   async rows<T extends Record<string, unknown>>(surfaceId: string): Promise<T[]> {
-    return await this.query<T>(surfaceId);
+    const cacheKey = `rows:${surfaceId}`;
+    let pending = this.rowCache.get(cacheKey);
+    if (!pending) {
+      pending = this.query<T>(surfaceId) as Promise<Record<string, unknown>[]>;
+      this.rowCache.set(cacheKey, pending);
+    }
+    return await pending as T[];
   }
 
   async query<T extends Record<string, unknown>>(surfaceId: string, input: Record<string, unknown> = {}): Promise<T[]> {
@@ -378,16 +386,24 @@ export class PrismStore implements AppStore {
   }
 
   async readTags(subjectRef: string, tagId?: string): Promise<PrismTagAssignment[]> {
+    const cacheKey = `read:${subjectRef}:${tagId ?? ""}`;
+    let pending = this.tagReadCache.get(cacheKey);
+    if (pending) return await pending;
     const input: { projectId: string; shardId: string; subjectRef: string; tagId?: string } = {
       projectId: this.options.projectId,
       shardId: this.options.shardId,
       subjectRef,
     };
     if (tagId !== undefined) input.tagId = tagId;
-    return await this.options.client.readSubjectTags(input);
+    pending = this.options.client.readSubjectTags(input);
+    this.tagReadCache.set(cacheKey, pending);
+    return await pending;
   }
 
   async findTags(tagId: string, valueKey?: string): Promise<PrismTagAssignment[]> {
+    const cacheKey = `find:${tagId}:${valueKey ?? ""}`;
+    let pending = this.tagReadCache.get(cacheKey);
+    if (pending) return await pending;
     const input: { projectId: string; shardId: string; tagId: string; valueKey?: string; limit?: number; offset?: number } = {
       projectId: this.options.projectId,
       shardId: this.options.shardId,
@@ -396,7 +412,9 @@ export class PrismStore implements AppStore {
       offset: 0,
     };
     if (valueKey !== undefined) input.valueKey = valueKey;
-    return await this.options.client.findSubjectsByTag(input);
+    pending = this.options.client.findSubjectsByTag(input);
+    this.tagReadCache.set(cacheKey, pending);
+    return await pending;
   }
 
   close(): void {
@@ -405,7 +423,7 @@ export class PrismStore implements AppStore {
 
   private async flush(operations: PrismMutation[], idempotencyKey: string): Promise<void> {
     if (operations.length === 0) return;
-    this.matcherResultCache.clear();
+    this.clearReadCaches();
     await this.options.client.submitSemanticCommit({
       projectId: this.options.projectId,
       shardId: this.options.shardId,
@@ -414,7 +432,13 @@ export class PrismStore implements AppStore {
       idempotencyKey,
       operations: operations.map(toSemanticOperation),
     });
+    this.clearReadCaches();
+  }
+
+  private clearReadCaches(): void {
     this.matcherResultCache.clear();
+    this.rowCache.clear();
+    this.tagReadCache.clear();
   }
 
   private async fetchMatcherTaskIds(fragment: AdmittedMatcherFragment, input: Record<string, unknown>): Promise<string[]> {
@@ -487,6 +511,16 @@ export class PrismGrpcRuntimeClient implements PrismRuntimeClient {
     });
     if (response.outcome !== "committed" || !response.has_commit_id) {
       throw new Error(`Prism semantic commit was not committed: ${JSON.stringify(response)}`);
+    }
+    if (process.env.UNBLOCK_PRISM_TRACE_COMMITS === "1") {
+      const receipt = parseRecordJson(response.receipt_json ?? "");
+      console.error(JSON.stringify({
+        kind: "prism.commit",
+        elapsedMs: numberValue(response.elapsed_ms, 0),
+        operationCount: numberValue(response.operation_count, 0),
+        mutationCount: numberValue(response.mutation_count, 0),
+        diagnostics: isRecord(receipt.diagnostics) ? receipt.diagnostics : {},
+      }));
     }
   }
 
@@ -1717,6 +1751,10 @@ interface RuntimeProtoPackage {
 interface SubmitSemanticCommitResponse {
   outcome: string;
   has_commit_id: boolean;
+  receipt_json?: string;
+  elapsed_ms?: number;
+  operation_count?: number;
+  mutation_count?: number;
 }
 
 interface MaterializedSurfaceResponse {
