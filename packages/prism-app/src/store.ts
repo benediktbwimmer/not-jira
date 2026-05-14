@@ -73,6 +73,18 @@ export interface PrismRuntimeClient {
     limit?: number;
     offset?: number;
   }): Promise<T[]>;
+  batchReadMaterializedSurfaces?<T extends Record<string, unknown>>(input: {
+    projectId: string;
+    shardId: string;
+    appId: string;
+    requests: Array<{
+      surfaceId: string;
+      replacementScope?: string;
+      outputKey?: string;
+      limit?: number;
+      offset?: number;
+    }>;
+  }): Promise<T[][]>;
   query<T extends Record<string, unknown>>(input: {
     projectId: string;
     shardId: string;
@@ -428,6 +440,61 @@ export class PrismStore implements AppStore {
         offset: 0,
       }));
     return rows[0] ?? null;
+  }
+
+  async materializedRowsByOutputKeys<T extends Record<string, unknown>>(
+    requests: Array<{ surfaceId: string; replacementScope: string; outputKey: string }>,
+  ): Promise<Array<T | null>> {
+    if (requests.length === 0) return [];
+    if (!useBatchMaterializedReads() || !this.options.client.batchReadMaterializedSurfaces || requests.length === 1) {
+      return await Promise.all(requests.map(async (request) =>
+        await this.materializedRowByOutputKey<T>(request.surfaceId, request.replacementScope, request.outputKey)
+      ));
+    }
+
+    const now = Date.now();
+    const ttlMs = this.options.readMode === "materialized" ? materializedRowCacheTtlMs() : Number.POSITIVE_INFINITY;
+    const rowPromises = new Array<Promise<T[]>>(requests.length);
+    const misses: Array<{ index: number; cacheKey: string; request: { surfaceId: string; replacementScope: string; outputKey: string } }> = [];
+
+    requests.forEach((request, index) => {
+      const cacheKey = `output:${request.surfaceId}:${request.replacementScope}:${request.outputKey}`;
+      const cached = this.rowCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        rowPromises[index] = cached.promise as Promise<T[]>;
+        return;
+      }
+      misses.push({ index, cacheKey, request });
+    });
+
+    if (misses.length > 0) {
+      const batchPromise = this.options.client.batchReadMaterializedSurfaces<T>({
+        projectId: this.options.projectId,
+        shardId: this.options.shardId,
+        appId: "unblock",
+        requests: misses.map(({ request }) => ({
+          surfaceId: request.surfaceId,
+          replacementScope: request.replacementScope,
+          outputKey: request.outputKey,
+          limit: 1,
+          offset: 0,
+        })),
+      });
+      const expiresAt = now + ttlMs;
+      misses.forEach((miss, missIndex) => {
+        const promise = batchPromise.then((sets) => sets[missIndex] ?? []) as Promise<Record<string, unknown>[]>;
+        this.rowCache.set(miss.cacheKey, { promise, expiresAt });
+        rowPromises[miss.index] = promise as Promise<T[]>;
+      });
+      batchPromise.catch(() => {
+        for (const miss of misses) {
+          if (this.rowCache.get(miss.cacheKey)?.expiresAt === expiresAt) this.rowCache.delete(miss.cacheKey);
+        }
+      });
+    }
+
+    const rows = await Promise.all(rowPromises);
+    return rows.map((items) => items[0] ?? null);
   }
 
   private async cachedRows<T extends Record<string, unknown>>(
@@ -923,6 +990,37 @@ export class PrismGrpcRuntimeClient implements PrismRuntimeClient {
     return response.outputs.map((output) => JSON.parse(output.output_json) as T);
   }
 
+  async batchReadMaterializedSurfaces<T extends Record<string, unknown>>(input: {
+    projectId: string;
+    shardId: string;
+    appId: string;
+    requests: Array<{
+      surfaceId: string;
+      replacementScope?: string;
+      outputKey?: string;
+      limit?: number;
+      offset?: number;
+    }>;
+  }): Promise<T[][]> {
+    if (input.requests.length === 0) return [];
+    const response = await unary<MaterializedSurfaceBatchResponse>(this.client, "ReadMaterializedSurfaces", {
+      requests: input.requests.map((request, index) => ({
+        project_id: input.projectId,
+        shard_id: input.shardId,
+        app_id: input.appId,
+        surface_id: request.surfaceId,
+        replacement_scope: request.replacementScope ?? "",
+        output_key: request.outputKey ?? "",
+        page: page(request.limit, request.offset),
+      })),
+    });
+    return input.requests.map((_request, index) => {
+      const surface = response.responses[index];
+      if (!surface) throw new Error(`Prism batch response missing materialized surface ${index}`);
+      return surface.outputs.map((output) => JSON.parse(output.output_json) as T);
+    });
+  }
+
   async query<T extends Record<string, unknown>>(input: {
     projectId: string;
     shardId: string;
@@ -1243,22 +1341,22 @@ class PrismDependencyRepository implements DependencyRepository {
       reverseDependencySummary,
       taskDescendantSummary,
       dependsOnTaskDescendantSummary,
-    ] = await Promise.all([
-      this.store.materializedRowByOutputKey<TaskRow>("taskRows", projectId, `${projectId}:${taskId}`),
-      this.store.materializedRowByOutputKey<TaskRow>("taskRows", projectId, `${projectId}:${dependsOnTaskId}`),
-      this.store.materializedRowByOutputKey<DependencyRow>("taskDependencyRows", projectId, `${projectId}:${taskId}:${dependsOnTaskId}`),
-      this.store.materializedRowByOutputKey<DependencySummaryRow>("taskDependencySummary", projectId, `${projectId}:${dependsOnTaskId}`),
-      this.store.materializedRowByOutputKey<DescendantSummaryRow>("descendantSummary", projectId, `${projectId}:${taskId}`),
-      this.store.materializedRowByOutputKey<DescendantSummaryRow>("descendantSummary", projectId, `${projectId}:${dependsOnTaskId}`),
+    ] = await this.store.materializedRowsByOutputKeys<Record<string, unknown>>([
+      { surfaceId: "taskRows", replacementScope: projectId, outputKey: `${projectId}:${taskId}` },
+      { surfaceId: "taskRows", replacementScope: projectId, outputKey: `${projectId}:${dependsOnTaskId}` },
+      { surfaceId: "taskDependencyRows", replacementScope: projectId, outputKey: `${projectId}:${taskId}:${dependsOnTaskId}` },
+      { surfaceId: "taskDependencySummary", replacementScope: projectId, outputKey: `${projectId}:${dependsOnTaskId}` },
+      { surfaceId: "descendantSummary", replacementScope: projectId, outputKey: `${projectId}:${taskId}` },
+      { surfaceId: "descendantSummary", replacementScope: projectId, outputKey: `${projectId}:${dependsOnTaskId}` },
     ]);
 
     return {
-      task: taskRow ? { id: taskRow.id, archivedAt: taskRow.archived_at } : null,
-      dependsOnTask: dependsOnTaskRow ? { id: dependsOnTaskRow.id, archivedAt: dependsOnTaskRow.archived_at } : null,
+      task: taskRow ? { id: stringValue(taskRow.id, ""), archivedAt: nullableString(taskRow.archived_at) } : null,
+      dependsOnTask: dependsOnTaskRow ? { id: stringValue(dependsOnTaskRow.id, ""), archivedAt: nullableString(dependsOnTaskRow.archived_at) } : null,
       exists: existingDependency !== null,
-      createsDependencyCycle: reverseDependencySummary?.dependency_ids.includes(taskId) ?? false,
-      taskContainsDependsOnTask: taskDescendantSummary?.descendant_ids.includes(dependsOnTaskId) ?? false,
-      dependsOnTaskContainsTask: dependsOnTaskDescendantSummary?.descendant_ids.includes(taskId) ?? false,
+      createsDependencyCycle: stringArrayValue(reverseDependencySummary?.dependency_ids).includes(taskId),
+      taskContainsDependsOnTask: stringArrayValue(taskDescendantSummary?.descendant_ids).includes(dependsOnTaskId),
+      dependsOnTaskContainsTask: stringArrayValue(dependsOnTaskDescendantSummary?.descendant_ids).includes(taskId),
     };
   }
 
@@ -2305,9 +2403,13 @@ function rowCacheSurfaceId(key: string): string | null {
 
 function materializedRowCacheTtlMs(): number {
   const raw = process.env.UNBLOCK_PRISM_MATERIALIZED_ROW_CACHE_MS;
-  if (raw === undefined) return 50;
+  if (raw === undefined) return 250;
   const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 50;
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 250;
+}
+
+function useBatchMaterializedReads(): boolean {
+  return process.env.UNBLOCK_PRISM_BATCH_MATERIALIZED_READS === "1";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2322,6 +2424,10 @@ function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function numberValue(value: unknown, fallback: number): number {
   return typeof value === "number" ? value : fallback;
 }
@@ -2330,6 +2436,7 @@ type RuntimeMethod =
   | "CompileRuntimeQueryFragment"
   | "SubmitSemanticCommit"
   | "ReadMaterializedSurface"
+  | "ReadMaterializedSurfaces"
   | "Query"
   | "ReadSubjectTags"
   | "FindSubjectsByTag"
@@ -2361,6 +2468,10 @@ interface SubmitSemanticCommitResponse {
 
 interface MaterializedSurfaceResponse {
   outputs: Array<{ output_json: string }>;
+}
+
+interface MaterializedSurfaceBatchResponse {
+  responses: MaterializedSurfaceResponse[];
 }
 
 interface QueryResponse {

@@ -16,6 +16,7 @@ service RuntimeService {
   rpc ReadSubjectTags(SubjectTagsRequest) returns (SubjectTagsResponse);
   rpc FindSubjectsByTag(TagSubjectsRequest) returns (TagSubjectsResponse);
   rpc ReadMaterializedSurface(MaterializedSurfaceRequest) returns (MaterializedSurfaceResponse);
+  rpc ReadMaterializedSurfaces(MaterializedSurfaceBatchRequest) returns (MaterializedSurfaceBatchResponse);
   rpc StartWorkflow(WorkflowStartRequest) returns (WorkflowStartResponse);
   rpc ReadWorkflow(WorkflowReadRequest) returns (WorkflowReadResponse);
   rpc WatchWorkflow(WorkflowWatchRequest) returns (WorkflowReadResponse);
@@ -292,6 +293,7 @@ message MaterializedSurfaceRequest {
   string surface_id = 4;
   string replacement_scope = 5;
   Page page = 6;
+  string output_key = 7;
 }
 
 message MaterializedSurfaceResponse {
@@ -302,6 +304,14 @@ message MaterializedSurfaceResponse {
   repeated MaterializedOutput outputs = 5;
   uint32 limit = 6;
   uint32 offset = 7;
+}
+
+message MaterializedSurfaceBatchRequest {
+  repeated MaterializedSurfaceRequest requests = 1;
+}
+
+message MaterializedSurfaceBatchResponse {
+  repeated MaterializedSurfaceResponse responses = 1;
 }
 
 message MaterializedOutput {
