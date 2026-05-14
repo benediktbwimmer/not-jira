@@ -245,12 +245,11 @@ export async function runGithubSmoke(
           encodeURIComponent(projectId)
         }&connectionId=${encodeURIComponent(connectionId)}&limit=100`,
       );
-      if (
-        !mappings.some((item) =>
-          item.taskId === taskId &&
-          Number(item.issueNumber) === Number(issue.number)
-        )
-      ) {
+      const mappingMatchesIssue = (item: any) =>
+        (item.taskId ?? item.localId) === taskId &&
+        Number(item.issueNumber ?? item.metadata?.issueNumber) ===
+          Number(issue.number);
+      if (!mappings.some(mappingMatchesIssue)) {
         throw new Error(
           `No GitHub mapping found for task ${taskId} and issue ${issue.number}.`,
         );
@@ -258,7 +257,7 @@ export async function runGithubSmoke(
       if (
         updatedTask.version != null &&
         !mappings.some((item) =>
-          item.taskId === taskId &&
+          (item.taskId ?? item.localId) === taskId &&
           item.localVersion === String(updatedTask.version)
         )
       ) {
