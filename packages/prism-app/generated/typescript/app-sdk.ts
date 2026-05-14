@@ -676,7 +676,7 @@ export type UnblockTaskBlockedByChildrenQueryRecord = {
 
 export const prismGeneratedManifest = {
   "projectId": "prism",
-  "manifestHash": "814ccbeb3aafb8d1",
+  "manifestHash": "8bce06b213bcf8aa",
   "apps": [
     "unblock"
   ],

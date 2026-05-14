@@ -22,8 +22,38 @@ export interface MatcherFragmentLowering {
   selectorHash: string;
   sourceHash: string;
   source: string;
+  queryPlan?: QirQueryPlan;
   usesDynamicTime: boolean;
   input(now?: Date, projectId?: string): Record<string, string>;
+}
+
+type QirExpr =
+  | { kind: "literal"; value: unknown }
+  | { kind: "path"; root: string; path: string[] }
+  | { kind: "parameter"; name: string; path: string[] }
+  | { kind: "unary"; op: "not" | "is_null" | "is_not_null"; expr: QirExpr }
+  | { kind: "binary"; op: "eq" | "not_eq" | "lt" | "lte" | "gt" | "gte" | "and" | "or" | "add" | "starts_with"; left: QirExpr; right: QirExpr }
+  | { kind: "call"; function: "key" | "lower" | "upper" | "coalesce"; args: QirExpr[] };
+
+type QirNode =
+  | { kind: "scan"; scan: QirScan }
+  | { kind: "filter"; input: QirNode; predicate: QirExpr }
+  | { kind: "project"; input: QirNode; fields: Array<{ name: string; expr: QirExpr }> }
+  | { kind: "join"; left: QirNode; right: QirNode; join_type: "left" | "inner"; on: QirExpr };
+
+type QirScan = { kind: "surface"; app_id: "unblock"; surface: BaseSurface | "taskLabelRows" | "taskDependencyClosure" | "hierarchyClosure" | "commentRows" };
+
+interface QirQueryPlan {
+  query_ir_version: 1;
+  plan_id: string;
+  root: QirNode;
+  output: { kind: "rows"; fields: Array<{ name: string; ty: { kind: "text" }; nullable: boolean }> };
+  shard_scope: "projected_cross_shard";
+  dependencies: unknown[];
+  temporal: null;
+  reconciliation: null;
+  required_features: string[];
+  source: { kind: "generated"; generator: string };
 }
 
 interface JoinSpec {
@@ -59,7 +89,7 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
           const task = taskPathForJoin(joinIndex);
           const labelMatches = normalizedValues
             .map((value) =>
-              `${label}.label_id.toLowerCase() === ${literal(value)} || ${label}.name.toLowerCase() === ${literal(value)}`
+              `${label}.label_id.toLowerCase() === ${literalString(value)} || ${label}.name.toLowerCase() === ${literalString(value)}`
             )
             .join(" || ");
           const predicate = mode === "in" ? `(${labelMatches})` : `!(${labelMatches})`;
@@ -76,9 +106,9 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
         on: (joinIndex, edge) => {
           const task = taskPathForJoin(joinIndex);
           if (predicate.verb === "depends on") {
-            return `${task}.id === ${edge}.from_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.to_id === ${literal(targetId)}`;
+            return `${task}.id === ${edge}.from_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.to_id === ${literalString(targetId)}`;
           }
-          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literal(targetId)}`;
+          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literalString(targetId)}`;
         },
       });
       return joinToken(index);
@@ -89,7 +119,7 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
         importName: "hierarchyClosure",
         on: (joinIndex, edge) => {
           const task = taskPathForJoin(joinIndex);
-          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literal(predicate.taskId)}`;
+          return `${task}.id === ${edge}.to_id && ${task}.project_id === ${edge}.scope_key && ${edge}.from_kind === "Task" && ${edge}.to_kind === "Task" && ${edge}.from_id === ${literalString(predicate.taskId)}`;
         },
       });
       return joinToken(index);
@@ -101,7 +131,7 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
         importName: "commentRows",
         on: (joinIndex, comment) => {
           const task = taskPathForJoin(joinIndex);
-          return `${task}.id === ${comment}.task_id && ${task}.project_id === ${comment}.project_id && ${comment}.archived_at === null && (${comment}.machine + ":" + ${comment}.actor).toLowerCase() === ${literal(expected)}`;
+          return `${task}.id === ${comment}.task_id && ${task}.project_id === ${comment}.project_id && ${comment}.archived_at === null && (${comment}.machine + ":" + ${comment}.actor).toLowerCase() === ${literalString(expected)}`;
         },
       });
       return joinToken(index);
@@ -126,10 +156,10 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
   )];
   const sourceImports = [...new Set([baseSurface, ...context.joins.map((join) => join.importName)])];
   const source = [
-    `import { z } from ${literal(authoringImportPath)};`,
-    `import { Unblock, ${sourceImports.join(", ")} } from ${literal(appImportPath)};`,
+    `import { z } from ${literalString(authoringImportPath)};`,
+    `import { Unblock, ${sourceImports.join(", ")} } from ${literalString(appImportPath)};`,
     "",
-    `Unblock.surface.query(${literal(fragmentId)})`,
+    `Unblock.surface.query(${literalString(fragmentId)})`,
     `  .input(z.object({ ${inputSchemaFields.join(", ")} }))`,
     "  .returns(z.object({",
     "    project_id: z.string(),",
@@ -147,11 +177,13 @@ export function lowerMatcherQueryToPrismFragment(query: string, options: Matcher
     "",
   ].join("\n");
   const sourceHash = stableHash(source);
+  const queryPlan = lowerMatcherQueryToQirPlan(ast, fragmentId);
   return {
     fragmentId,
     selectorHash,
     sourceHash,
     source,
+    ...(queryPlan ? { queryPlan } : {}),
     usesDynamicTime: context.times.length > 0,
     input(now = new Date(), projectId = "") {
       return {
@@ -221,6 +253,172 @@ function baseSurfaceForRank(rank: number): BaseSurface {
   return "taskRows";
 }
 
+function lowerMatcherQueryToQirPlan(node: QueryNode, fragmentId: string): QirQueryPlan | null {
+  const joins: Array<{ surface: QirScan["surface"]; on(index: number): QirExpr; matched(totalJoins: number): QirExpr }> = [];
+  const predicateBuilder = lowerNodeToQir(node, joins);
+  if (!predicateBuilder) return null;
+  const totalJoins = joins.length;
+  const task = taskExpr(totalJoins);
+  let input: QirNode = scanSurface(baseSurfaceForQuery(node));
+  joins.forEach((join, index) => {
+    input = {
+      kind: "join",
+      left: input,
+      right: scanSurface(join.surface),
+      join_type: "left",
+      on: join.on(index),
+    };
+  });
+  const predicate = andExpr([
+    eq(pathExpr(task.root, [...task.path, "project_id"]), parameter("project_id")),
+    eq(pathExpr(task.root, [...task.path, "archived_at"]), literal(null)),
+    predicateBuilder(totalJoins),
+  ]);
+  return {
+    query_ir_version: 1,
+    plan_id: fragmentId,
+    root: {
+      kind: "project",
+      input: {
+        kind: "filter",
+        input,
+        predicate,
+      },
+      fields: [
+        { name: "project_id", expr: pathExpr(task.root, [...task.path, "project_id"]) },
+        { name: "task_id", expr: pathExpr(task.root, [...task.path, "id"]) },
+      ],
+    },
+    output: {
+      kind: "rows",
+      fields: [
+        { name: "project_id", ty: { kind: "text" }, nullable: false },
+        { name: "task_id", ty: { kind: "text" }, nullable: false },
+      ],
+    },
+    shard_scope: "projected_cross_shard",
+    dependencies: [],
+    temporal: null,
+    reconciliation: null,
+    required_features: [],
+    source: { kind: "generated", generator: "unblock.matcher.dsl" },
+  };
+}
+
+function lowerNodeToQir(
+  node: QueryNode,
+  joins: Array<{ surface: QirScan["surface"]; on(index: number): QirExpr; matched(totalJoins: number): QirExpr }>,
+): ((totalJoins: number) => QirExpr) | null {
+  switch (node.type) {
+    case "and": {
+      const children = node.nodes.map((child) => lowerNodeToQir(child, joins));
+      if (children.some((child) => child === null)) return null;
+      return (totalJoins) => andExpr(children.map((child) => child!(totalJoins)));
+    }
+    case "or": {
+      const children = node.nodes.map((child) => lowerNodeToQir(child, joins));
+      if (children.some((child) => child === null)) return null;
+      return (totalJoins) => orExpr(children.map((child) => child!(totalJoins)));
+    }
+    case "not": {
+      const child = lowerNodeToQir(node.node, joins);
+      return child ? (totalJoins) => ({ kind: "unary", op: "not", expr: child(totalJoins) }) : null;
+    }
+    case "field":
+      return lowerFieldToQir(node, joins);
+    case "graph":
+      return lowerGraphToQir(node, joins);
+    case "hierarchy":
+    case "comment":
+    case "time":
+      return null;
+  }
+}
+
+function lowerFieldToQir(
+  predicate: FieldPredicate,
+  joins: Array<{ surface: QirScan["surface"]; on(index: number): QirExpr; matched(totalJoins: number): QirExpr }>,
+): ((totalJoins: number) => QirExpr) | null {
+  if (predicate.field === "tag") {
+    const normalizedValues = predicate.values.map((value) => value.toLowerCase());
+    const index = joins.length;
+    joins.push({
+      surface: "taskLabelRows",
+      on(joinIndex) {
+        const task = taskExprForJoin(joinIndex);
+        const labelMatches = orExpr(normalizedValues.flatMap((value) => [
+          eq(lower(pathExpr("right", ["label_id"])), literal(value)),
+          eq(lower(pathExpr("right", ["name"])), literal(value)),
+        ]));
+        return andExpr([
+          eq(pathExpr(task.root, [...task.path, "id"]), pathExpr("right", ["task_id"])),
+          eq(pathExpr(task.root, [...task.path, "project_id"]), pathExpr("right", ["project_id"])),
+          predicate.op === "!=" ? notExpr(labelMatches) : labelMatches,
+        ]);
+      },
+      matched(totalJoins) {
+        return notNull(joinExpr(index, totalJoins));
+      },
+    });
+    return (totalJoins) => predicate.op === "not in"
+      ? isNull(joinExpr(index, totalJoins))
+      : notNull(joinExpr(index, totalJoins));
+  }
+  if (predicate.field === "priority" && isNumericCompareOp(predicate.op)) {
+    const priority = parsePriority(predicate.values[0] ?? "");
+    const op = predicate.op;
+    return (totalJoins) => compare(pathExprForTask(totalJoins, "priority"), op, literal(priority));
+  }
+  if (predicate.op !== "=" && predicate.op !== "!=") return null;
+  if (predicate.field === "id" || predicate.field === "lifecycle" || predicate.field === "status") {
+    const field = predicate.field === "status" ? "computed_status" : predicate.field;
+    const expected = predicate.field === "id" ? predicate.values[0]?.toUpperCase() ?? "" : predicate.values[0]?.toLowerCase() ?? "";
+    return (totalJoins) => {
+      const value = predicate.field === "id" ? upper(pathExprForTask(totalJoins, field)) : lower(pathExprForTask(totalJoins, field));
+      const equality = andExpr([notNull(pathExprForTask(totalJoins, field)), eq(value, literal(expected))]);
+      return predicate.op === "=" ? equality : andExpr([notNull(pathExprForTask(totalJoins, field)), notExpr(equality)]);
+    };
+  }
+  return null;
+}
+
+function lowerGraphToQir(
+  predicate: GraphPredicate,
+  joins: Array<{ surface: QirScan["surface"]; on(index: number): QirExpr; matched(totalJoins: number): QirExpr }>,
+): ((totalJoins: number) => QirExpr) | null {
+  if (!predicate.targetId) {
+    const countField = predicate.verb === "depends on" ? "dependency_count" : "unblocks_count";
+    const count = predicate.count ?? { op: ">" as CompareOp, value: 0 };
+    return (totalJoins) => compare(pathExprForTask(totalJoins, countField), count.op, literal(count.value));
+  }
+  const index = joins.length;
+  const targetId = predicate.targetId;
+  joins.push({
+    surface: "taskDependencyClosure",
+    on(joinIndex) {
+      const task = taskExprForJoin(joinIndex);
+      const fromTask = predicate.verb === "depends on";
+      return andExpr([
+        eq(pathExpr(task.root, [...task.path, "id"]), pathExpr("right", [fromTask ? "from_id" : "to_id"])),
+        eq(pathExpr(task.root, [...task.path, "project_id"]), pathExpr("right", ["scope_key"])),
+        eq(pathExpr("right", ["from_kind"]), literal("Task")),
+        eq(pathExpr("right", ["to_kind"]), literal("Task")),
+        eq(pathExpr("right", [fromTask ? "to_id" : "from_id"]), literal(targetId)),
+      ]);
+    },
+    matched(totalJoins) {
+      return notNull(joinExpr(index, totalJoins));
+    },
+  });
+  return (totalJoins) => {
+    const clauses = [notNull(joinExpr(index, totalJoins))];
+    if (predicate.depth) {
+      clauses.push(compare(pathExprForJoinResult(index, totalJoins, "min_depth"), predicate.depth.op, literal(predicate.depth.value)));
+    }
+    return andExpr(clauses);
+  };
+}
+
 function lowerNode(node: QueryNode, task: string, context: LowerContext): string {
   switch (node.type) {
     case "and":
@@ -263,7 +461,7 @@ function lowerFieldComparison(field: FieldName, op: CompareOp, expected: string,
   if (field === "comments") return compareNumber(`${task}.comment_count`, op, Number(expected));
   if (field === "assigned") return lowerAssignedComparison(task, op, expected);
   if (field === "id prefix") {
-    const starts = `${task}.id.toUpperCase().startsWith(${literal(expected.toUpperCase())})`;
+    const starts = `${task}.id.toUpperCase().startsWith(${literalString(expected.toUpperCase())})`;
     return op === "=" ? starts : op === "!=" ? `!(${starts})` : "false";
   }
   const values = fieldValueExpressions(field, task);
@@ -274,7 +472,7 @@ function lowerFieldComparison(field: FieldName, op: CompareOp, expected: string,
 
 function lowerAssignedComparison(task: string, op: CompareOp, expected: string): string {
   if (op !== "=" && op !== "!=") return "false";
-  const normalized = literal(expected.toLowerCase());
+  const normalized = literalString(expected.toLowerCase());
   const hasAssignment = `${task}.assigned_machine !== null && ${task}.assigned_actor !== null`;
   const full = `(${hasAssignment} && (${task}.assigned_machine + ":" + ${task}.assigned_actor).toLowerCase() === ${normalized})`;
   const actor = `(${task}.assigned_actor !== null && ${task}.assigned_actor.toLowerCase() === ${normalized})`;
@@ -312,7 +510,7 @@ function compareString(left: string, op: CompareOp, expected: string, field: Fie
   if (op !== "=" && op !== "!=") return "false";
   const normalize = field === "id" || field === "parent" ? "toUpperCase" : "toLowerCase";
   const expectedValue = normalize === "toUpperCase" ? expected.toUpperCase() : expected.toLowerCase();
-  const equality = `${left} !== null && ${left}.${normalize}() === ${literal(expectedValue)}`;
+  const equality = `${left} !== null && ${left}.${normalize}() === ${literalString(expectedValue)}`;
   return op === "=" ? equality : `(${left} !== null && !(${equality}))`;
 }
 
@@ -386,6 +584,98 @@ function joinPath(index: number, totalJoins: number): string {
   return `row${".left".repeat(totalJoins - index - 1)}.right`;
 }
 
+function scanSurface(surface: QirScan["surface"]): QirNode {
+  return { kind: "scan", scan: { kind: "surface", app_id: "unblock", surface } };
+}
+
+function literal(value: unknown): QirExpr {
+  return { kind: "literal", value };
+}
+
+function pathExpr(root: string, path: string[]): QirExpr {
+  return { kind: "path", root, path };
+}
+
+function parameter(name: string): QirExpr {
+  return { kind: "parameter", name, path: [] };
+}
+
+function taskExpr(totalJoins: number): { root: string; path: string[] } {
+  return { root: "row", path: Array.from({ length: totalJoins }, () => "left") };
+}
+
+function taskExprForJoin(joinIndex: number): { root: string; path: string[] } {
+  return { root: "left", path: Array.from({ length: joinIndex }, () => "left") };
+}
+
+function joinExpr(index: number, totalJoins: number): QirExpr {
+  return pathExpr("row", joinResultPath(index, totalJoins));
+}
+
+function pathExprForJoinResult(index: number, totalJoins: number, field: string): QirExpr {
+  return pathExpr("row", [...joinResultPath(index, totalJoins), field]);
+}
+
+function joinResultPath(index: number, totalJoins: number): string[] {
+  if (index === totalJoins - 1) return ["right"];
+  return [...Array.from({ length: totalJoins - index - 1 }, () => "left"), "right"];
+}
+
+function pathExprForTask(totalJoins: number, field: string): QirExpr {
+  const task = taskExpr(totalJoins);
+  return pathExpr(task.root, [...task.path, field]);
+}
+
+function eq(left: QirExpr, right: QirExpr): QirExpr {
+  return { kind: "binary", op: "eq", left, right };
+}
+
+function notExpr(expr: QirExpr): QirExpr {
+  return { kind: "unary", op: "not", expr };
+}
+
+function isNull(expr: QirExpr): QirExpr {
+  return { kind: "unary", op: "is_null", expr };
+}
+
+function notNull(expr: QirExpr): QirExpr {
+  return { kind: "unary", op: "is_not_null", expr };
+}
+
+function lower(expr: QirExpr): QirExpr {
+  return { kind: "call", function: "lower", args: [expr] };
+}
+
+function upper(expr: QirExpr): QirExpr {
+  return { kind: "call", function: "upper", args: [expr] };
+}
+
+function compare(left: QirExpr, op: CompareOp, right: QirExpr): QirExpr {
+  return { kind: "binary", op: qirCompareOp(op), left, right };
+}
+
+function andExpr(items: QirExpr[]): QirExpr {
+  return items.reduce((left, right) => ({ kind: "binary", op: "and", left, right }));
+}
+
+function orExpr(items: QirExpr[]): QirExpr {
+  if (items.length === 0) return literal(false);
+  return items.reduce((left, right) => ({ kind: "binary", op: "or", left, right }));
+}
+
+function qirCompareOp(op: CompareOp): "eq" | "not_eq" | "lt" | "lte" | "gt" | "gte" {
+  if (op === "=") return "eq";
+  if (op === "!=") return "not_eq";
+  if (op === "<") return "lt";
+  if (op === "<=") return "lte";
+  if (op === ">") return "gt";
+  return "gte";
+}
+
+function isNumericCompareOp(op: FieldPredicate["op"]): op is CompareOp {
+  return op === "=" || op === "!=" || op === ">" || op === ">=" || op === "<" || op === "<=";
+}
+
 function leftArg(index: number): string {
   return index === 0 ? "left" : "left";
 }
@@ -427,7 +717,7 @@ function durationMs(amount: number, unit: "m" | "h" | "d" | "w"): number {
   return amount * 7 * 24 * 60 * minute;
 }
 
-function literal(value: string): string {
+function literalString(value: string): string {
   return JSON.stringify(value);
 }
 

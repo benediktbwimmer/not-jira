@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { credentials, loadPackageDefinition, type ChannelCredentials, type Client, type ServiceError } from "@grpc/grpc-js";
+import { credentials, loadPackageDefinition, type ChannelCredentials, type Client, type ClientUnaryCall, type ServiceError } from "@grpc/grpc-js";
 import { loadSync } from "@grpc/proto-loader";
 import {
   sqliteMigrations,
@@ -107,7 +107,7 @@ export interface PrismRuntimeClient {
     projectId: string;
     fragmentId: string;
     purpose?: string;
-    sourceKind: "typescript_app" | "authoring_ir_json";
+    sourceKind: "typescript_app" | "authoring_ir_json" | "query_plan_json";
     sourceJson: string;
     denyWarnings?: boolean;
   }): Promise<RuntimeQueryFragmentArtifact>;
@@ -798,7 +798,7 @@ export class PrismGrpcRuntimeClient implements PrismRuntimeClient {
     projectId: string;
     fragmentId: string;
     purpose?: string;
-    sourceKind: "typescript_app" | "authoring_ir_json";
+    sourceKind: "typescript_app" | "authoring_ir_json" | "query_plan_json";
     sourceJson: string;
     denyWarnings?: boolean;
   }): Promise<RuntimeQueryFragmentArtifact> {
@@ -907,13 +907,18 @@ export class PrismRuntimeMatcherFragmentCompiler implements MatcherFragmentCompi
       projectId: this.options.projectId,
       fragmentId: fragment.fragmentId,
       purpose: this.options.purpose ?? "unblock.matcher",
-      sourceKind: "typescript_app",
-      sourceJson: JSON.stringify({
-        entrypoint: "src/app.ts",
-        files: {
-          "src/app.ts": fragment.source,
-        },
-      }),
+      sourceKind: fragment.queryPlan ? "query_plan_json" : "typescript_app",
+      sourceJson: fragment.queryPlan
+        ? JSON.stringify({
+          app_id: "unblock",
+          query_plan: fragment.queryPlan,
+        })
+        : JSON.stringify({
+          entrypoint: "src/app.ts",
+          files: {
+            "src/app.ts": fragment.source,
+          },
+        }),
       denyWarnings: this.options.denyWarnings ?? false,
     });
   }
@@ -1842,7 +1847,21 @@ function parseRecordJson(recordJson: string): Record<string, unknown> {
 
 function unary<Response>(client: RuntimeServiceClient, method: RuntimeMethod, request: Record<string, unknown>): Promise<Response> {
   return new Promise((resolve, reject) => {
-    client[method](request, (error: ServiceError | null, response: Response) => {
+    const timeoutMs = Number(process.env.UNBLOCK_PRISM_RPC_TIMEOUT_MS ?? "30000");
+    let settled = false;
+    let call: ClientUnaryCall | undefined;
+    const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        call?.cancel();
+        reject(new Error(`Timed out waiting for Prism RPC ${method} after ${timeoutMs}ms request=${JSON.stringify(request).slice(0, 1000)}`));
+      }, timeoutMs)
+      : undefined;
+    call = (client[method] as unknown as (request: Record<string, unknown>, callback: (error: ServiceError | null, response: Response) => void) => ClientUnaryCall)(request, (error, response) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
       if (error) reject(error);
       else resolve(response);
     });

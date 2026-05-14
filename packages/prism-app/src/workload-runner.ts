@@ -109,6 +109,7 @@ interface ProjectReport {
 
 interface MixedWorkloadSummary {
   operations: number;
+  elapsedMs?: number;
   operationCounts: Record<string, number>;
   operationStats?: Record<string, MixedOperationStats>;
   operationsPerSecond?: number;
@@ -188,7 +189,7 @@ async function main(): Promise<void> {
     phases.push(...aggregateProjectPhases(projectReports));
     const totals = aggregateProjectTotals(projectReports);
 
-    const mixed = aggregateMixedSummaries(projectReports, workloadElapsedMs);
+    const mixed = aggregateMixedSummaries(projectReports);
     const report: RunnerReport = {
       ok: true,
       workloadId: options.workloadId,
@@ -396,8 +397,10 @@ async function runProjectMixedWorkload(options: RunnerOptions, projectIndex: num
 
     const mixed: MixedWorkloadSummary = {
       operations: options.mixedOperations,
+      elapsedMs: mixedPhase.elapsedMs,
       operationCounts: Object.fromEntries([...operationStats].sort(([left], [right]) => left.localeCompare(right)).map(([kind, stats]) => [kind, stats.count])),
       operationStats: mixedOperationStatsJson(operationStats),
+      operationsPerSecond: roundRate(options.mixedOperations / Math.max(mixedPhase.elapsedMs / 1000, 0.001)),
     };
     return {
       ...seed,
@@ -580,14 +583,16 @@ function aggregateProjectTotals(projects: ProjectReport[]): WorkloadTotals {
   return totals;
 }
 
-function aggregateMixedSummaries(projects: ProjectReport[], elapsedMs: number): MixedWorkloadSummary | undefined {
+function aggregateMixedSummaries(projects: ProjectReport[]): MixedWorkloadSummary | undefined {
   const mixedProjects = projects.filter((project) => project.mixed);
   if (mixedProjects.length === 0) return undefined;
   const operationStats = new Map<string, { count: number; totalMs: number; maxMs: number }>();
   let operations = 0;
+  let elapsedMs = 0;
   for (const project of mixedProjects) {
     const mixed = project.mixed!;
     operations += mixed.operations;
+    elapsedMs = Math.max(elapsedMs, mixed.elapsedMs ?? phaseElapsed(project, "unblock.mixed.operations"));
     for (const [kind, stats] of Object.entries(mixed.operationStats ?? {})) {
       const current = operationStats.get(kind) ?? { count: 0, totalMs: 0, maxMs: 0 };
       current.count += stats.count;
@@ -599,10 +604,17 @@ function aggregateMixedSummaries(projects: ProjectReport[], elapsedMs: number): 
   const seconds = Math.max(elapsedMs / 1000, 0.001);
   return {
     operations,
+    elapsedMs,
     operationCounts: Object.fromEntries([...operationStats].sort(([left], [right]) => left.localeCompare(right)).map(([kind, stats]) => [kind, stats.count])),
     operationStats: mixedOperationStatsJson(operationStats),
     operationsPerSecond: roundRate(operations / seconds),
   };
+}
+
+function phaseElapsed(project: ProjectReport, phaseName: string): number {
+  return project.phases
+    .filter((phase) => phase.name === phaseName)
+    .reduce((max, phase) => Math.max(max, phase.elapsedMs), 0);
 }
 
 function mixedOperationStatsJson(stats: Map<string, { count: number; totalMs: number; maxMs: number }>): Record<string, MixedOperationStats> {
@@ -960,7 +972,10 @@ function printReport(report: RunnerReport, options: RunnerOptions): void {
   console.log(`workloadTotal: ${report.totals.workloadElapsedMs}ms wallTotal: ${report.totals.wallElapsedMs}ms tasks=${report.totals.tasksVisible} dependencies=${report.totals.dependenciesVisible} taskTags=${report.totals.taskTagsVisible} matcherMatches=${report.totals.matcherMatches} instructionMatches=${report.totals.instructionMatches}`);
   console.log(`throughput: tasks=${report.throughput.tasksPerSecond}/s dependencies=${report.throughput.dependenciesPerSecond}/s taskTags=${report.throughput.taskTagsPerSecond}/s projects=${report.throughput.projectsPerSecond}/s`);
   if (report.mixed) {
-    console.log(`mixed: operations=${report.mixed.operations} rate=${report.mixed.operationsPerSecond}/s counts=${JSON.stringify(report.mixed.operationCounts)}`);
+    console.log(`mixed: operations=${report.mixed.operations} elapsed=${report.mixed.elapsedMs}ms rate=${report.mixed.operationsPerSecond}/s counts=${JSON.stringify(report.mixed.operationCounts)}`);
+    if (report.mixed.operationStats) {
+      console.log(`mixedStats: ${JSON.stringify(report.mixed.operationStats)}`);
+    }
   }
 }
 

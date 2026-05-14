@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project_id": "prism",
-  "manifest_hash": "814ccbeb3aafb8d1",
+  "manifest_hash": "8bce06b213bcf8aa",
   "runtime_protocol": {
     "kind": "protobuf_grpc",
     "package": "prism.runtime.v1",
