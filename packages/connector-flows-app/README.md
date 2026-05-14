@@ -1,17 +1,17 @@
 # Hosted Unblock Connector Flows
 
-This Prism Flows app is the hosted connector orchestration boundary for
-Unblock. It deliberately does not store Unblock task state in Prism. Unblock
-publishes typed connector events from its Postgres outbox; this Flow app owns
-durable external orchestration and posts resulting connector events back to the
-Unblock inbox.
+This Prism Flows app is the hosted connector orchestration boundary for Unblock.
+It deliberately does not store Unblock task state in Prism. Unblock publishes
+typed connector events from its Postgres outbox; this Flow app owns durable
+external orchestration and posts resulting connector events back to the Unblock
+inbox.
 
 Current fixture:
 
 - `unblock-connector-dispatch`: manual outbox dispatch plus scheduled
   reconciliation trigger.
-- `mockConnectorApply`: deterministic mock connector job used to review the
-  Flow boundary before GitHub Issues is implemented.
+- `mockConnectorApply`: deterministic mock connector job used to review the Flow
+  boundary before GitHub Issues is implemented.
 - `github-issues-inbound`: GitHub `issues` webhook ingestion with Prism trigger
   signature metadata, delivery dedupe, issue-to-task mapping, and Unblock inbox
   application.
@@ -51,11 +51,12 @@ PRISM_RUNTIME_ENDPOINT=http://127.0.0.1:50051 \
 PRISM_FLOWS_PROJECT_ID=unblock-flows \
 GITHUB_REPOSITORY=owner/repo \
 GITHUB_TOKEN=... \
+GITHUB_INSTALLATION_TOKEN=... \
 deno run --allow-env --allow-net --allow-read packages/connector-flows-app/scripts/github_smoke.ts
 ```
 
-The smoke creates a GitHub issue, starts the `github-issues-inbound` Flow,
-waits for the hosted Unblock task, updates the task, starts the
+The smoke creates a GitHub issue, starts the `github-issues-inbound` Flow, waits
+for the hosted Unblock task, updates the task, starts the
 `github-issues-outbound` Flow, waits for the GitHub issue update, confirms the
 mapping, and closes the test issue by default. Use `--no-cleanup` to leave the
 issue open for inspection. Use `--allow-missing-env` for CI/preflight jobs that
@@ -64,5 +65,7 @@ should report missing credentials without failing the job.
 `GITHUB_TOKEN` is only the smoke runner token for creating, polling, and
 cleaning up the disposable issue. The deployed Flow app still needs its own
 configured `UNBLOCK_HOSTED_API_TOKEN` and `GITHUB_INSTALLATION_TOKEN` secrets.
+For local smoke runs, `GITHUB_INSTALLATION_TOKEN` may be the same token if the
+repository permissions are sufficient.
 
 The app imports the local Prism Flows SDK from `~/code/prism-new3`.

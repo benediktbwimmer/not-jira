@@ -1,19 +1,27 @@
-import { missingGithubSmokeEnv, runGithubSmoke } from "../scripts/github_smoke.ts";
+import {
+  missingGithubSmokeEnv,
+  runGithubSmoke,
+} from "../scripts/github_smoke.ts";
 
 Deno.test("GitHub smoke runner reports missing environment without network", async () => {
   const result = await runGithubSmoke({}, { allowMissingEnv: true });
   if (result.ok || !result.skipped) {
-    throw new Error("smoke runner should skip when required environment is absent");
+    throw new Error(
+      "smoke runner should skip when required environment is absent",
+    );
   }
-  for (const expected of [
-    "UNBLOCK_HOSTED_API_URL",
-    "UNBLOCK_TENANT_ID",
-    "UNBLOCK_PROJECT_ID",
-    "PRISM_RUNTIME_ENDPOINT",
-    "GITHUB_REPOSITORY",
-    "GITHUB_TOKEN",
-    "UNBLOCK_HOSTED_API_TOKEN",
-  ]) {
+  for (
+    const expected of [
+      "UNBLOCK_HOSTED_API_URL",
+      "UNBLOCK_TENANT_ID",
+      "UNBLOCK_PROJECT_ID",
+      "PRISM_RUNTIME_ENDPOINT",
+      "GITHUB_REPOSITORY",
+      "GITHUB_TOKEN",
+      "GITHUB_INSTALLATION_TOKEN",
+      "UNBLOCK_HOSTED_API_TOKEN",
+    ]
+  ) {
     if (!result.missing?.includes(expected)) {
       throw new Error(`missing environment did not include ${expected}`);
     }
@@ -29,9 +37,14 @@ Deno.test("GitHub smoke runner preflight accepts a complete environment", () => 
     PRISM_RUNTIME_ENDPOINT: "http://127.0.0.1:50051",
     GITHUB_REPOSITORY: "owner/repo",
     GITHUB_TOKEN: "github-token",
+    GITHUB_INSTALLATION_TOKEN: "github-token",
   });
   if (missing.length !== 0) {
-    throw new Error(`complete smoke environment still reported missing keys: ${missing.join(", ")}`);
+    throw new Error(
+      `complete smoke environment still reported missing keys: ${
+        missing.join(", ")
+      }`,
+    );
   }
 });
 
@@ -46,8 +59,13 @@ Deno.test("GitHub smoke runner preflight accepts trusted-header auth", () => {
     PRISM_RUNTIME_ENDPOINT: "http://127.0.0.1:50051",
     GITHUB_REPOSITORY: "benediktbwimmer/unblock",
     GITHUB_TOKEN: "github-token",
+    GITHUB_INSTALLATION_TOKEN: "github-token",
   });
   if (missing.length !== 0) {
-    throw new Error(`trusted-header smoke environment still reported missing keys: ${missing.join(", ")}`);
+    throw new Error(
+      `trusted-header smoke environment still reported missing keys: ${
+        missing.join(", ")
+      }`,
+    );
   }
 });
