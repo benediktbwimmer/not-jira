@@ -72,6 +72,14 @@ describe.each(storeCases)("storage parity: $name", ({ name, create }) => {
     await services.feeds.add({ id: "READY-FEED", name: "Ready feed", query: "status = ready" });
 
     expect((await services.query.match("tag = backend", 10)).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.query.match("assigned = codex-e", 10)).map((task) => task.id)).toEqual(["DB"]);
+    expect((await services.query.match("parent = API", 10)).map((task) => task.id)).toEqual(["API-CHILD"]);
+    expect((await services.query.match("descendant of API", 10)).map((task) => task.id)).toEqual(["API-CHILD"]);
+    expect((await services.query.match("depends on DB", 10)).map((task) => task.id)).toEqual(["API", "API-CHILD"]);
+    expect((await services.query.match("unblocks API-CHILD", 10)).map((task) => task.id)).toEqual(["DB"]);
+    expect((await services.query.match("comments > 0", 10)).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.query.match(`commented by ${name}-machine:codex-e`, 10)).map((task) => task.id)).toEqual(["API"]);
+    expect((await services.query.match("status = blocked", 10)).map((task) => task.id)).toEqual(["API-CHILD"]);
     expect(await services.dependencies.list("API-CHILD")).toMatchObject([{ taskId: "API-CHILD", dependsOnTaskId: "DB" }]);
     expect((await services.instructions.matchesForTask("API")).map((match) => match.instruction.id)).toEqual(["BACKEND-INST"]);
     expect(await services.comments.list("API")).toHaveLength(1);

@@ -1,5 +1,6 @@
 import pg from "pg";
 import { validation } from "./errors.js";
+import { lowerPostgresMatcherTaskIds } from "./postgres-matcher.js";
 import { postgresMigrations, DEFAULT_TENANT_ID } from "./postgres-migrations.js";
 import type {
   ActivityRepository,
@@ -8,6 +9,7 @@ import type {
   DependencyRepository,
   InboxEventRepository,
   MigrationRepository,
+  MatcherQueryRepository,
   OutboxEventRepository,
   ProjectRepository,
   QueueFeedRepository,
@@ -36,7 +38,7 @@ export class PostgresStore implements AppStore {
     transactionalWrites: true,
     coreDomain: true,
     comments: true,
-    matcherQuery: "service",
+    matcherQuery: "store",
     bulkOperations: true,
     outboxInbox: true
   } as const;
@@ -54,6 +56,7 @@ export class PostgresStore implements AppStore {
   readonly migrations: MigrationRepository;
   readonly outbox: OutboxEventRepository;
   readonly inbox: InboxEventRepository;
+  readonly matcher: MatcherQueryRepository;
 
   constructor(
     private readonly pool: pg.Pool,
@@ -74,6 +77,7 @@ export class PostgresStore implements AppStore {
     this.migrations = new PostgresMigrationRepository(this.queryable);
     this.outbox = new PostgresOutboxEventRepository(this.queryable, this.tenantId);
     this.inbox = new PostgresInboxEventRepository(this.queryable, this.tenantId);
+    this.matcher = new PostgresMatcherRepository(this.queryable, this.tenantId);
   }
 
   async transaction<T>(fn: (repos: RepositorySet) => Promise<T>): Promise<T> {
@@ -103,6 +107,16 @@ export class PostgresStore implements AppStore {
     if (this.ownsPool) {
       await this.pool.end();
     }
+  }
+}
+
+class PostgresMatcherRepository implements MatcherQueryRepository {
+  constructor(private readonly db: Queryable, private readonly tenantId: string) {}
+
+  async matchTaskIds(projectId: string, query: string, filters = {}): Promise<string[]> {
+    const lowered = lowerPostgresMatcherTaskIds(projectId, query, filters);
+    const result = await this.db.query(lowered.taskIds.sql, [this.tenantId, ...lowered.taskIds.params]);
+    return result.rows.map((row) => String(row.id));
   }
 }
 
