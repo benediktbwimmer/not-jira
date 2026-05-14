@@ -15,6 +15,18 @@ import type {
   Instruction
 } from "./types.js";
 
+export type StoreDialect = "memory" | "sqlite" | "postgres" | "hosted" | "prism";
+
+export interface StoreCapabilities {
+  dialect: StoreDialect;
+  transactionalWrites: boolean;
+  coreDomain: boolean;
+  comments: boolean;
+  matcherQuery: "service" | "store";
+  bulkOperations: boolean;
+  outboxInbox: boolean;
+}
+
 export interface ProjectRepository {
   list(): Promise<Project[]>;
   get(id: string): Promise<Project | null>;
@@ -144,7 +156,16 @@ export interface RepositorySet {
   migrations: MigrationRepository;
 }
 
+/**
+ * AppStore is the core Unblock storage contract. Implementations must preserve
+ * the service semantics in services.ts: project-scoped task IDs, transactional
+ * domain writes plus activity records, dependency and hierarchy validation,
+ * exclusive track assignment, matcher-compatible reads, and import/export
+ * parity. Hosted-only stores may add repositories outside this interface, but
+ * local SQLite and Postgres must both satisfy this core contract.
+ */
 export interface AppStore extends RepositorySet {
+  readonly capabilities?: StoreCapabilities;
   matcher?: MatcherQueryRepository;
   transaction<T>(fn: (repos: RepositorySet) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;

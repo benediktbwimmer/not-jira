@@ -168,6 +168,15 @@ interface QueueFeedRow {
 }
 
 export class SqliteStore implements AppStore {
+  readonly capabilities = {
+    dialect: "sqlite",
+    transactionalWrites: true,
+    coreDomain: true,
+    comments: true,
+    matcherQuery: "service",
+    bulkOperations: true,
+    outboxInbox: false
+  } as const;
   readonly projects: ProjectRepository;
   readonly tasks: TaskRepository;
   readonly dependencies: DependencyRepository;

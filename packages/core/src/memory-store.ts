@@ -33,6 +33,15 @@ interface MemoryState {
 }
 
 export class MemoryStore implements AppStore {
+  readonly capabilities = {
+    dialect: "memory",
+    transactionalWrites: true,
+    coreDomain: true,
+    comments: true,
+    matcherQuery: "service",
+    bulkOperations: false,
+    outboxInbox: false
+  } as const;
   private readonly state: MemoryState;
   readonly tasks: TaskRepository;
   readonly projects: ProjectRepository;
