@@ -76,8 +76,25 @@ and benchmark reporting:
   implemented.
 
 SQLite currently reports service-level matcher evaluation and no outbox/inbox.
-Postgres should report store-level matcher once SQL lowering lands, and
-outbox/inbox after hosted connector primitives land.
+Postgres currently reports service-level matcher evaluation plus hosted
+outbox/inbox primitives.
+
+## Hosted Connector Primitives
+
+Postgres stores may expose optional `outbox` and `inbox` repositories. These
+repositories are not required for SQLite, but hosted connector code should use
+them when `capabilities.outboxInbox` is true.
+
+- `outbox.enqueue` is idempotent when an `idempotencyKey` is present and returns
+  the existing event for duplicate local domain events.
+- `outbox.listReady` and `outbox.claim` support retry workers by selecting
+  pending or failed events whose `availableAt` is due.
+- `outbox.markProcessed`, `markFailed`, and `markDead` record terminal or retry
+  state plus JSON evidence.
+- `inbox.receive` is idempotent by `(source, externalEventId)` and reports
+  whether the inbound event was newly inserted or already known.
+- `inbox.markApplying`, `markApplied`, `markFailed`, and `markDead` let inbound
+  connector application converge under webhook replay and Flow retries.
 
 ## Non-Goals
 

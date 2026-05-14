@@ -12,7 +12,9 @@ import type {
   TaskListFilters,
   Track,
   TrackAssignment,
-  Instruction
+  Instruction,
+  OutboxEvent,
+  InboxEvent
 } from "./types.js";
 
 export type StoreDialect = "memory" | "sqlite" | "postgres" | "hosted" | "prism";
@@ -129,6 +131,27 @@ export interface MigrationRepository {
   markApplied(migration: Migration): Promise<void>;
 }
 
+export interface OutboxEventRepository {
+  enqueue(event: OutboxEvent): Promise<OutboxEvent>;
+  get(id: string): Promise<OutboxEvent | null>;
+  findByIdempotencyKey(idempotencyKey: string): Promise<OutboxEvent | null>;
+  listReady(limit: number, now: string): Promise<OutboxEvent[]>;
+  claim(id: string, claimedAt: string): Promise<OutboxEvent | null>;
+  markProcessed(id: string, processedAt: string, evidence?: Record<string, unknown>): Promise<OutboxEvent | null>;
+  markFailed(id: string, error: Record<string, unknown>, availableAt: string, evidence?: Record<string, unknown>): Promise<OutboxEvent | null>;
+  markDead(id: string, error: Record<string, unknown>, evidence?: Record<string, unknown>): Promise<OutboxEvent | null>;
+}
+
+export interface InboxEventRepository {
+  receive(event: InboxEvent): Promise<{ event: InboxEvent; created: boolean }>;
+  get(id: string): Promise<InboxEvent | null>;
+  findBySource(source: string, externalEventId: string): Promise<InboxEvent | null>;
+  markApplying(id: string): Promise<InboxEvent | null>;
+  markApplied(id: string, appliedAt: string, evidence?: Record<string, unknown>): Promise<InboxEvent | null>;
+  markFailed(id: string, error: Record<string, unknown>, evidence?: Record<string, unknown>): Promise<InboxEvent | null>;
+  markDead(id: string, error: Record<string, unknown>, evidence?: Record<string, unknown>): Promise<InboxEvent | null>;
+}
+
 export interface MatcherQueryRepository {
   matchTaskIds(projectId: string, query: string, filters?: Omit<TaskListFilters, "where">): Promise<string[]>;
   matchingInstructionIds?(
@@ -154,6 +177,8 @@ export interface RepositorySet {
   feeds: QueueFeedRepository;
   activity: ActivityRepository;
   migrations: MigrationRepository;
+  outbox?: OutboxEventRepository;
+  inbox?: InboxEventRepository;
 }
 
 /**

@@ -239,6 +239,47 @@ export const postgresMigrations: StoreMigration[] = [
         foreign key (tenant_id, project_id) references projects(tenant_id, id) on delete restrict
       );
 
+      create table if not exists outbox_events (
+        tenant_id text not null references tenants(id) on delete restrict,
+        project_id text null,
+        id text primary key,
+        event_type text not null,
+        subject_type text not null,
+        subject_id text null,
+        payload_json jsonb not null,
+        idempotency_key text null,
+        status text not null check (status in ('pending', 'claimed', 'processed', 'failed', 'dead')),
+        attempt_count integer not null default 0 check (attempt_count >= 0),
+        available_at timestamptz not null,
+        created_at timestamptz not null,
+        claimed_at timestamptz null,
+        processed_at timestamptz null,
+        error_json jsonb null,
+        evidence_json jsonb not null default '{}'::jsonb,
+        foreign key (tenant_id, project_id) references projects(tenant_id, id) on delete restrict
+      );
+
+      create unique index if not exists outbox_events_tenant_idempotency_idx
+        on outbox_events (tenant_id, idempotency_key)
+        where idempotency_key is not null;
+
+      create table if not exists inbox_events (
+        tenant_id text not null references tenants(id) on delete restrict,
+        project_id text null,
+        id text primary key,
+        source text not null,
+        external_event_id text not null,
+        event_type text not null,
+        payload_json jsonb not null,
+        status text not null check (status in ('received', 'applying', 'applied', 'failed', 'dead')),
+        applied_at timestamptz null,
+        created_at timestamptz not null,
+        error_json jsonb null,
+        evidence_json jsonb not null default '{}'::jsonb,
+        foreign key (tenant_id, project_id) references projects(tenant_id, id) on delete restrict,
+        unique (tenant_id, source, external_event_id)
+      );
+
       create index if not exists tasks_tenant_project_lifecycle_idx on tasks(tenant_id, project_id, archived_at, lifecycle);
       create index if not exists tasks_tenant_project_parent_idx on tasks(tenant_id, project_id, parent_task_id);
       create index if not exists tasks_tenant_project_priority_idx on tasks(tenant_id, project_id, priority);
@@ -256,6 +297,10 @@ export const postgresMigrations: StoreMigration[] = [
       create index if not exists comments_actor_created_idx on comments(tenant_id, project_id, machine, actor, created_at);
       create index if not exists activity_project_created_idx on activity(tenant_id, project_id, created_at desc);
       create index if not exists activity_subject_idx on activity(tenant_id, project_id, subject_type, subject_id, created_at desc);
+      create index if not exists outbox_events_ready_idx on outbox_events(tenant_id, status, available_at, created_at);
+      create index if not exists outbox_events_subject_idx on outbox_events(tenant_id, project_id, subject_type, subject_id, created_at desc);
+      create index if not exists inbox_events_status_idx on inbox_events(tenant_id, project_id, status, created_at);
+      create index if not exists inbox_events_type_idx on inbox_events(tenant_id, project_id, event_type, created_at desc);
     `
   }
 ];

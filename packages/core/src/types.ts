@@ -168,6 +168,41 @@ export interface Migration {
   appliedAt: string;
 }
 
+export type OutboxEventStatus = "pending" | "claimed" | "processed" | "failed" | "dead";
+export type InboxEventStatus = "received" | "applying" | "applied" | "failed" | "dead";
+
+export interface OutboxEvent {
+  projectId: string | null;
+  id: string;
+  eventType: string;
+  subjectType: string;
+  subjectId: string | null;
+  payload: Record<string, unknown>;
+  idempotencyKey: string | null;
+  status: OutboxEventStatus;
+  attemptCount: number;
+  availableAt: string;
+  createdAt: string;
+  claimedAt: string | null;
+  processedAt: string | null;
+  error: Record<string, unknown> | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface InboxEvent {
+  projectId: string | null;
+  id: string;
+  source: string;
+  externalEventId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  status: InboxEventStatus;
+  appliedAt: string | null;
+  createdAt: string;
+  error: Record<string, unknown> | null;
+  evidence: Record<string, unknown>;
+}
+
 export interface AssignedTrackView {
   trackId: string;
   machine: string;

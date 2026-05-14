@@ -6,7 +6,9 @@ import type {
   AppStore,
   CommentRepository,
   DependencyRepository,
+  InboxEventRepository,
   MigrationRepository,
+  OutboxEventRepository,
   ProjectRepository,
   QueueFeedRepository,
   RepositorySet,
@@ -16,7 +18,7 @@ import type {
   TaskRepository,
   TrackRepository
 } from "./store.js";
-import type { Activity, Comment, Dependency, Instruction, Migration, Project, QueueFeed, SavedView, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
+import type { Activity, Comment, Dependency, InboxEvent, Instruction, Migration, OutboxEvent, Project, QueueFeed, SavedView, Tag, Task, TaskTag, Track, TrackAssignment } from "./types.js";
 import { nowIso } from "./types.js";
 
 type Queryable = pg.Pool | pg.PoolClient;
@@ -36,7 +38,7 @@ export class PostgresStore implements AppStore {
     comments: true,
     matcherQuery: "service",
     bulkOperations: true,
-    outboxInbox: false
+    outboxInbox: true
   } as const;
 
   readonly projects: ProjectRepository;
@@ -50,6 +52,8 @@ export class PostgresStore implements AppStore {
   readonly feeds: QueueFeedRepository;
   readonly activity: ActivityRepository;
   readonly migrations: MigrationRepository;
+  readonly outbox: OutboxEventRepository;
+  readonly inbox: InboxEventRepository;
 
   constructor(
     private readonly pool: pg.Pool,
@@ -68,6 +72,8 @@ export class PostgresStore implements AppStore {
     this.feeds = new PostgresQueueFeedRepository(this.queryable, this.tenantId);
     this.activity = new PostgresActivityRepository(this.queryable, this.tenantId);
     this.migrations = new PostgresMigrationRepository(this.queryable);
+    this.outbox = new PostgresOutboxEventRepository(this.queryable, this.tenantId);
+    this.inbox = new PostgresInboxEventRepository(this.queryable, this.tenantId);
   }
 
   async transaction<T>(fn: (repos: RepositorySet) => Promise<T>): Promise<T> {
@@ -488,6 +494,196 @@ class PostgresActivityRepository implements ActivityRepository {
   }
 }
 
+class PostgresOutboxEventRepository implements OutboxEventRepository {
+  constructor(private readonly db: Queryable, private readonly tenantId: string) {}
+
+  async enqueue(event: OutboxEvent): Promise<OutboxEvent> {
+    const result = await this.db.query(`
+      with inserted as (
+        insert into outbox_events (
+          tenant_id, project_id, id, event_type, subject_type, subject_id, payload_json, idempotency_key,
+          status, attempt_count, available_at, created_at, claimed_at, processed_at, error_json, evidence_json
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb)
+        on conflict (tenant_id, idempotency_key) where idempotency_key is not null do nothing
+        returning *, true as inserted
+      )
+      select * from inserted
+      union all
+      select outbox_events.*, false as inserted
+      from outbox_events
+      where tenant_id = $1 and idempotency_key = $8 and $8 is not null and not exists (select 1 from inserted)
+      limit 1
+    `, [
+      this.tenantId,
+      event.projectId,
+      event.id,
+      event.eventType,
+      event.subjectType,
+      event.subjectId,
+      JSON.stringify(event.payload),
+      event.idempotencyKey,
+      event.status,
+      event.attemptCount,
+      event.availableAt,
+      event.createdAt,
+      event.claimedAt,
+      event.processedAt,
+      JSON.stringify(event.error),
+      JSON.stringify(event.evidence)
+    ]);
+    return outboxEventFromRow(result.rows[0]);
+  }
+
+  async get(id: string): Promise<OutboxEvent | null> {
+    const result = await this.db.query("select * from outbox_events where tenant_id = $1 and id = $2", [this.tenantId, id]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async findByIdempotencyKey(idempotencyKey: string): Promise<OutboxEvent | null> {
+    const result = await this.db.query("select * from outbox_events where tenant_id = $1 and idempotency_key = $2", [this.tenantId, idempotencyKey]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async listReady(limit: number, now: string): Promise<OutboxEvent[]> {
+    const result = await this.db.query(`
+      select * from outbox_events
+      where tenant_id = $1 and status in ('pending', 'failed') and available_at <= $2
+      order by available_at asc, created_at asc
+      limit $3
+    `, [this.tenantId, now, limit]);
+    return result.rows.map(outboxEventFromRow);
+  }
+
+  async claim(id: string, claimedAt: string): Promise<OutboxEvent | null> {
+    const result = await this.db.query(`
+      update outbox_events
+      set status = 'claimed', claimed_at = $3, attempt_count = attempt_count + 1
+      where tenant_id = $1 and id = $2 and status in ('pending', 'failed') and available_at <= $3
+      returning *
+    `, [this.tenantId, id, claimedAt]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markProcessed(id: string, processedAt: string, evidence: Record<string, unknown> = {}): Promise<OutboxEvent | null> {
+    const result = await this.db.query(`
+      update outbox_events
+      set status = 'processed', processed_at = $3, error_json = null, evidence_json = evidence_json || $4::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, processedAt, JSON.stringify(evidence)]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markFailed(id: string, error: Record<string, unknown>, availableAt: string, evidence: Record<string, unknown> = {}): Promise<OutboxEvent | null> {
+    const result = await this.db.query(`
+      update outbox_events
+      set status = 'failed', available_at = $3, error_json = $4::jsonb, evidence_json = evidence_json || $5::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, availableAt, JSON.stringify(error), JSON.stringify(evidence)]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markDead(id: string, error: Record<string, unknown>, evidence: Record<string, unknown> = {}): Promise<OutboxEvent | null> {
+    const result = await this.db.query(`
+      update outbox_events
+      set status = 'dead', error_json = $3::jsonb, evidence_json = evidence_json || $4::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, JSON.stringify(error), JSON.stringify(evidence)]);
+    return result.rows[0] ? outboxEventFromRow(result.rows[0]) : null;
+  }
+}
+
+class PostgresInboxEventRepository implements InboxEventRepository {
+  constructor(private readonly db: Queryable, private readonly tenantId: string) {}
+
+  async receive(event: InboxEvent): Promise<{ event: InboxEvent; created: boolean }> {
+    const result = await this.db.query(`
+      with inserted as (
+        insert into inbox_events (
+          tenant_id, project_id, id, source, external_event_id, event_type, payload_json,
+          status, applied_at, created_at, error_json, evidence_json
+        )
+        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb, $12::jsonb)
+        on conflict (tenant_id, source, external_event_id) do nothing
+        returning *, true as inserted
+      )
+      select * from inserted
+      union all
+      select inbox_events.*, false as inserted
+      from inbox_events
+      where tenant_id = $1 and source = $4 and external_event_id = $5 and not exists (select 1 from inserted)
+      limit 1
+    `, [
+      this.tenantId,
+      event.projectId,
+      event.id,
+      event.source,
+      event.externalEventId,
+      event.eventType,
+      JSON.stringify(event.payload),
+      event.status,
+      event.appliedAt,
+      event.createdAt,
+      JSON.stringify(event.error),
+      JSON.stringify(event.evidence)
+    ]);
+    return { event: inboxEventFromRow(result.rows[0]), created: result.rows[0].inserted === true };
+  }
+
+  async get(id: string): Promise<InboxEvent | null> {
+    const result = await this.db.query("select * from inbox_events where tenant_id = $1 and id = $2", [this.tenantId, id]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async findBySource(source: string, externalEventId: string): Promise<InboxEvent | null> {
+    const result = await this.db.query("select * from inbox_events where tenant_id = $1 and source = $2 and external_event_id = $3", [this.tenantId, source, externalEventId]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markApplying(id: string): Promise<InboxEvent | null> {
+    const result = await this.db.query(`
+      update inbox_events
+      set status = 'applying'
+      where tenant_id = $1 and id = $2 and status in ('received', 'failed')
+      returning *
+    `, [this.tenantId, id]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markApplied(id: string, appliedAt: string, evidence: Record<string, unknown> = {}): Promise<InboxEvent | null> {
+    const result = await this.db.query(`
+      update inbox_events
+      set status = 'applied', applied_at = $3, error_json = null, evidence_json = evidence_json || $4::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, appliedAt, JSON.stringify(evidence)]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markFailed(id: string, error: Record<string, unknown>, evidence: Record<string, unknown> = {}): Promise<InboxEvent | null> {
+    const result = await this.db.query(`
+      update inbox_events
+      set status = 'failed', error_json = $3::jsonb, evidence_json = evidence_json || $4::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, JSON.stringify(error), JSON.stringify(evidence)]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+
+  async markDead(id: string, error: Record<string, unknown>, evidence: Record<string, unknown> = {}): Promise<InboxEvent | null> {
+    const result = await this.db.query(`
+      update inbox_events
+      set status = 'dead', error_json = $3::jsonb, evidence_json = evidence_json || $4::jsonb
+      where tenant_id = $1 and id = $2
+      returning *
+    `, [this.tenantId, id, JSON.stringify(error), JSON.stringify(evidence)]);
+    return result.rows[0] ? inboxEventFromRow(result.rows[0]) : null;
+  }
+}
+
 class PostgresInstructionRepository implements InstructionRepository {
   constructor(private readonly db: Queryable, private readonly tenantId: string) {}
 
@@ -705,6 +901,53 @@ function projectFromRow(row: any): Project {
 
 function migrationFromRow(row: any): Migration {
   return { id: row.id, name: row.name, appliedAt: iso(row.applied_at) };
+}
+
+function outboxEventFromRow(row: any): OutboxEvent {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    eventType: row.event_type,
+    subjectType: row.subject_type,
+    subjectId: row.subject_id,
+    payload: jsonRecord(row.payload_json),
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    attemptCount: row.attempt_count,
+    availableAt: iso(row.available_at),
+    createdAt: iso(row.created_at),
+    claimedAt: nullableIso(row.claimed_at),
+    processedAt: nullableIso(row.processed_at),
+    error: row.error_json === null || row.error_json === undefined ? null : jsonRecord(row.error_json),
+    evidence: jsonRecord(row.evidence_json)
+  };
+}
+
+function inboxEventFromRow(row: any): InboxEvent {
+  return {
+    projectId: row.project_id,
+    id: row.id,
+    source: row.source,
+    externalEventId: row.external_event_id,
+    eventType: row.event_type,
+    payload: jsonRecord(row.payload_json),
+    status: row.status,
+    appliedAt: nullableIso(row.applied_at),
+    createdAt: iso(row.created_at),
+    error: row.error_json === null || row.error_json === undefined ? null : jsonRecord(row.error_json),
+    evidence: jsonRecord(row.evidence_json)
+  };
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+  return { value: parsed };
 }
 
 function iso(value: unknown): string {
