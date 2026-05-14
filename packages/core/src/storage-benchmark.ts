@@ -74,9 +74,7 @@ export async function runStorageCrudBenchmark(store: AppStore, options: StorageC
     name: `bench-tag-${index.toString().padStart(3, "0")}`
   }));
   await measure(phases, "tags.create", tags.length, async () => {
-    for (const tag of tags) {
-      await services.tags.add(tag);
-    }
+    await services.tags.addMany(tags);
   });
 
   const sizes: TaskSize[] = ["XS", "S", "M", "L", "XL"];
@@ -118,15 +116,20 @@ export async function runStorageCrudBenchmark(store: AppStore, options: StorageC
   });
 
   await measure(phases, "comments.create", commentCount, async () => {
-    for (let index = 0; index < commentCount; index += 1) {
-      await services.comments.add(taskId(index), { body: `Benchmark comment ${index}.` });
-    }
+    await services.comments.addMany(Array.from({ length: commentCount }, (_item, index) => ({
+      taskId: taskId(index),
+      body: `Benchmark comment ${index}.`
+    })));
   });
 
   await measure(phases, "activity.append", activityCount, async () => {
-    for (let index = 0; index < activityCount; index += 1) {
-      await services.activity.record("benchmark.activity", "project", projectId, `Benchmark activity ${index}`, { index });
-    }
+    await services.activity.recordMany(Array.from({ length: activityCount }, (_item, index) => ({
+      type: "benchmark.activity",
+      subjectType: "project",
+      subjectId: projectId,
+      message: `Benchmark activity ${index}`,
+      data: { index }
+    })));
   });
 
   const elapsedMs = roundMs(performance.now() - startedAt);

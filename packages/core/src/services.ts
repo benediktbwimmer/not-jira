@@ -166,6 +166,19 @@ export class ActivityService {
     return activity;
   }
 
+  async recordMany(inputs: Array<{ type: string; subjectType: Activity["subjectType"]; subjectId: string | null; message: string; data?: Record<string, unknown> | undefined }>): Promise<Activity[]> {
+    const activity = inputs.map((input) => this.make(this.projectId, input.type, input.subjectType, input.subjectId, input.message, input.data ?? {}));
+    if (activity.length === 0) return [];
+    if (this.store.activity.appendMany) {
+      await this.store.activity.appendMany(activity);
+    } else {
+      for (const item of activity) {
+        await this.store.activity.append(item);
+      }
+    }
+    return activity;
+  }
+
   make(projectId: string | null, type: string, subjectType: Activity["subjectType"], subjectId: string | null, message: string, data: Record<string, unknown> = {}): Activity {
     return makeActivity(projectId, type, subjectType, subjectId, message, data, this.provenance());
   }
@@ -360,8 +373,12 @@ export class TaskService {
         }
         ensureFinishedParentDoesNotContainUnfinishedChild(parent, task);
       }
-      for (const task of tasks) {
-        await repos.tasks.create(task);
+      if (repos.tasks.createMany) {
+        await repos.tasks.createMany(tasks);
+      } else {
+        for (const task of tasks) {
+          await repos.tasks.create(task);
+        }
       }
       await repos.activity.append(this.activity.make(this.projectId, "task.batch_created", "project", this.projectId, `Created ${tasks.length} tasks`, { count: tasks.length }));
     });
@@ -772,6 +789,55 @@ export class CommentService {
     return comment;
   }
 
+  async addMany(inputs: Array<{ taskId: string; body: string }>): Promise<Comment[]> {
+    const provenance = this.activity.provenance();
+    const now = nowIso();
+    const comments = inputs.map((input) => {
+      const taskId = normalizeId(input.taskId);
+      return {
+        projectId: this.projectId,
+        id: randomUUID(),
+        taskId,
+        machine: provenance.machine,
+        actor: provenance.actor,
+        body: normalizeCommentBody(input.body),
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null
+      } satisfies Comment;
+    });
+    if (comments.length === 0) return [];
+
+    await this.store.transaction(async (repos) => {
+      const taskIds = [...new Set(comments.map((comment) => comment.taskId))];
+      const existingTasks = taskIds.length <= 100
+        ? await collectSequential(taskIds, async (taskId) => await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId))
+        : await repos.tasks.list(this.projectId);
+      const existingTaskIds = new Set(existingTasks.map((task) => task.id));
+      for (const taskId of taskIds) {
+        if (!existingTaskIds.has(taskId)) {
+          notFound("task", taskId);
+        }
+      }
+      if (repos.comments.createMany) {
+        await repos.comments.createMany(comments);
+      } else {
+        for (const comment of comments) {
+          await repos.comments.create(comment);
+        }
+      }
+      const activity = comments.map((comment) => this.activity.make(this.projectId, "comment.created", "comment", comment.id, `Commented on ${comment.taskId}`, { taskId: comment.taskId }));
+      if (repos.activity.appendMany) {
+        await repos.activity.appendMany(activity);
+      } else {
+        for (const item of activity) {
+          await repos.activity.append(item);
+        }
+      }
+    });
+    return comments;
+  }
+
   async list(taskIdInput: string, options: { includeArchived?: boolean | undefined; limit?: number | undefined } = {}): Promise<Comment[]> {
     const taskId = normalizeId(taskIdInput);
     await this.store.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
@@ -860,6 +926,56 @@ export class TagService {
       await repos.activity.append(this.activity.make(this.projectId, "tag.created", "tag", tag.id, `Created tag ${tag.name}`));
     });
     return tag;
+  }
+
+  async addMany(inputs: AddTagInput[]): Promise<Tag[]> {
+    const now = nowIso();
+    const tags = inputs.map((input) => {
+      const tag: Tag = {
+        projectId: this.projectId,
+        id: input.id ? normalizeId(input.id) : normalizeId(slugify(input.name)),
+        name: input.name.trim(),
+        color: input.color ?? null,
+        description: input.description ?? null,
+        sortOrder: input.sortOrder ?? 0,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null
+      };
+      if (!tag.name) {
+        validation("Tag name is required.");
+      }
+      return tag;
+    });
+    if (tags.length === 0) return [];
+
+    const seenIds = new Set<string>();
+    const seenNames = new Set<string>();
+    for (const tag of tags) {
+      if (seenIds.has(tag.id)) conflict(`Tag already exists: ${tag.id}`);
+      if (seenNames.has(tag.name)) conflict(`Tag name already exists: ${tag.name}`);
+      seenIds.add(tag.id);
+      seenNames.add(tag.name);
+    }
+
+    await this.store.transaction(async (repos) => {
+      const existing = await repos.tags.list(this.projectId);
+      const existingIds = new Set(existing.map((tag) => tag.id));
+      const existingNames = new Set(existing.map((tag) => tag.name));
+      for (const tag of tags) {
+        if (existingIds.has(tag.id)) conflict(`Tag already exists: ${tag.id}`);
+        if (existingNames.has(tag.name)) conflict(`Tag name already exists: ${tag.name}`);
+      }
+      if (repos.tags.createMany) {
+        await repos.tags.createMany(tags);
+      } else {
+        for (const tag of tags) {
+          await repos.tags.create(tag);
+        }
+      }
+      await repos.activity.append(this.activity.make(this.projectId, "tag.batch_created", "project", this.projectId, `Created ${tags.length} tags`, { count: tags.length }));
+    });
+    return tags;
   }
 
   async edit(id: string, input: Partial<AddTagInput>): Promise<Tag> {

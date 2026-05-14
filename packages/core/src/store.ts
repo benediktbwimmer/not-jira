@@ -40,6 +40,7 @@ export interface TaskRepository {
   list(projectId?: string): Promise<Task[]>;
   get(projectId: string, id: string): Promise<Task | null>;
   create(task: Task): Promise<void>;
+  createMany?(tasks: Task[]): Promise<void>;
   update(task: Task): Promise<void>;
   updateWithPrevious?(previous: Task, task: Task): Promise<void>;
   delete(projectId: string, id: string): Promise<void>;
@@ -71,6 +72,7 @@ export interface CommentRepository {
   listForTask(projectId: string, taskId: string): Promise<Comment[]>;
   get(projectId: string, id: string): Promise<Comment | null>;
   create(comment: Comment): Promise<void>;
+  createMany?(comments: Comment[]): Promise<void>;
   update(comment: Comment): Promise<void>;
 }
 
@@ -79,6 +81,7 @@ export interface TagRepository {
   get(projectId: string, id: string): Promise<Tag | null>;
   findByName(projectId: string, name: string): Promise<Tag | null>;
   create(tag: Tag): Promise<void>;
+  createMany?(tags: Tag[]): Promise<void>;
   update(tag: Tag): Promise<void>;
   listTaskTags(projectId?: string): Promise<TaskTag[]>;
   hasTaskTag?(projectId: string, taskId: string, tagId: string): Promise<boolean>;
@@ -102,6 +105,7 @@ export interface TrackRepository {
 export interface ActivityRepository {
   list(projectId?: string | null, limit?: number): Promise<Activity[]>;
   append(activity: Activity): Promise<void>;
+  appendMany?(activity: Activity[]): Promise<void>;
 }
 
 export interface InstructionRepository {

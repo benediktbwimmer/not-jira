@@ -193,6 +193,19 @@ class PostgresTaskRepository implements TaskRepository {
     `, taskParams(this.tenantId, task));
   }
 
+  async createMany(tasks: Task[]): Promise<void> {
+    for (const chunk of chunks(tasks, 500)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into tasks (
+          tenant_id, project_id, id, parent_task_id, title, description, lifecycle, priority, size, source_doc, source_section,
+          source_anchor, source_line, source_text, completion_bar, created_at, updated_at,
+          started_at, finished_at, archived_at, version
+        ) values ${valuesPlaceholders(chunk.length, 21)}
+      `, chunk.flatMap((task) => taskParams(this.tenantId, task)));
+    }
+  }
+
   async update(task: Task): Promise<void> {
     await this.db.query(`
       update tasks set
@@ -305,8 +318,13 @@ class PostgresDependencyRepository implements DependencyRepository {
   }
 
   async addMany(dependencies: Dependency[]): Promise<void> {
-    for (const dependency of dependencies) {
-      await this.add(dependency);
+    for (const chunk of chunks(dependencies, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into task_dependencies (tenant_id, project_id, task_id, depends_on_task_id, created_at)
+        values ${valuesPlaceholders(chunk.length, 5)}
+        on conflict do nothing
+      `, chunk.flatMap((dependency) => [this.tenantId, dependency.projectId, dependency.taskId, dependency.dependsOnTaskId, dependency.createdAt]));
     }
   }
 
@@ -352,6 +370,16 @@ class PostgresCommentRepository implements CommentRepository {
     `, [this.tenantId, comment.projectId, comment.id, comment.taskId, comment.machine, comment.actor, comment.body, comment.createdAt, comment.updatedAt, comment.archivedAt]);
   }
 
+  async createMany(comments: Comment[]): Promise<void> {
+    for (const chunk of chunks(comments, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into comments (tenant_id, project_id, id, task_id, machine, actor, body, created_at, updated_at, archived_at)
+        values ${valuesPlaceholders(chunk.length, 10)}
+      `, chunk.flatMap((comment) => [this.tenantId, comment.projectId, comment.id, comment.taskId, comment.machine, comment.actor, comment.body, comment.createdAt, comment.updatedAt, comment.archivedAt]));
+    }
+  }
+
   async update(comment: Comment): Promise<void> {
     await this.db.query(`
       update comments set task_id = $4, machine = $5, actor = $6, body = $7, updated_at = $8, archived_at = $9
@@ -387,6 +415,16 @@ class PostgresTagRepository implements TagRepository {
     `, [this.tenantId, tag.projectId, tag.id, tag.name, tag.color, tag.description, tag.sortOrder, tag.createdAt, tag.updatedAt, tag.archivedAt]);
   }
 
+  async createMany(tags: Tag[]): Promise<void> {
+    for (const chunk of chunks(tags, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into tags (tenant_id, project_id, id, name, color, description, sort_order, created_at, updated_at, archived_at)
+        values ${valuesPlaceholders(chunk.length, 10)}
+      `, chunk.flatMap((tag) => [this.tenantId, tag.projectId, tag.id, tag.name, tag.color, tag.description, tag.sortOrder, tag.createdAt, tag.updatedAt, tag.archivedAt]));
+    }
+  }
+
   async update(tag: Tag): Promise<void> {
     await this.db.query(`
       update tags set name = $4, color = $5, description = $6, sort_order = $7, updated_at = $8, archived_at = $9
@@ -415,8 +453,13 @@ class PostgresTagRepository implements TagRepository {
   }
 
   async addTaskTags(assignments: Array<{ taskTag: TaskTag }>): Promise<void> {
-    for (const { taskTag } of assignments) {
-      await this.addTaskTag(taskTag);
+    for (const chunk of chunks(assignments, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into task_tags (tenant_id, project_id, task_id, tag_id, created_at)
+        values ${valuesPlaceholders(chunk.length, 5)}
+        on conflict do nothing
+      `, chunk.flatMap(({ taskTag }) => [this.tenantId, taskTag.projectId, taskTag.taskId, taskTag.tagId, taskTag.createdAt]));
     }
   }
 
@@ -500,6 +543,16 @@ class PostgresActivityRepository implements ActivityRepository {
       insert into activity (tenant_id, project_id, id, type, subject_type, subject_id, message, data_json, machine, actor, created_at)
       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
     `, [this.tenantId, activity.projectId, activity.id, activity.type, activity.subjectType, activity.subjectId, activity.message, JSON.stringify(activity.data), activity.machine, activity.actor, activity.createdAt]);
+  }
+
+  async appendMany(activity: Activity[]): Promise<void> {
+    for (const chunk of chunks(activity, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into activity (tenant_id, project_id, id, type, subject_type, subject_id, message, data_json, machine, actor, created_at)
+        values ${jsonValuesPlaceholders(chunk.length, 11, new Set([8]))}
+      `, chunk.flatMap((item) => [this.tenantId, item.projectId, item.id, item.type, item.subjectType, item.subjectId, item.message, JSON.stringify(item.data), item.machine, item.actor, item.createdAt]));
+    }
   }
 }
 
@@ -716,8 +769,12 @@ class PostgresInstructionRepository implements InstructionRepository {
   }
 
   async createMany(instructions: Instruction[]): Promise<void> {
-    for (const instruction of instructions) {
-      await this.create(instruction);
+    for (const chunk of chunks(instructions, 1000)) {
+      if (chunk.length === 0) continue;
+      await this.db.query(`
+        insert into instructions (tenant_id, project_id, id, name, query, body, enabled, created_at, updated_at, archived_at)
+        values ${valuesPlaceholders(chunk.length, 10)}
+      `, chunk.flatMap((instruction) => [this.tenantId, instruction.projectId, instruction.id, instruction.name, instruction.query, instruction.body, instruction.enabled, instruction.createdAt, instruction.updatedAt, instruction.archivedAt]));
     }
   }
 
@@ -966,6 +1023,29 @@ function iso(value: unknown): string {
 
 function nullableIso(value: unknown): string | null {
   return value === null || value === undefined ? null : iso(value);
+}
+
+function valuesPlaceholders(rowCount: number, columnCount: number): string {
+  return jsonValuesPlaceholders(rowCount, columnCount, new Set());
+}
+
+function jsonValuesPlaceholders(rowCount: number, columnCount: number, jsonColumns: Set<number>): string {
+  return Array.from({ length: rowCount }, (_row, rowIndex) => {
+    const columns = Array.from({ length: columnCount }, (_column, columnIndex) => {
+      const parameterIndex = rowIndex * columnCount + columnIndex + 1;
+      const placeholder = `$${parameterIndex}`;
+      return jsonColumns.has(columnIndex + 1) ? `${placeholder}::jsonb` : placeholder;
+    });
+    return `(${columns.join(", ")})`;
+  }).join(", ");
+}
+
+function chunks<T>(items: T[], chunkSize: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    result.push(items.slice(index, index + chunkSize));
+  }
+  return result;
 }
 
 function isPoolClient(value: Queryable): value is pg.PoolClient {
