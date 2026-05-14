@@ -7,6 +7,7 @@ export * from "./postgres-migrations.js";
 export * from "./postgres-store.js";
 export * from "./postgres-matcher.js";
 export * from "./hosted-identity.js";
+export * from "./connector-events.js";
 export * from "./services.js";
 export * from "./memory-store.js";
 export * from "./sqlite-store.js";
