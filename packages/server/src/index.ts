@@ -31,6 +31,7 @@ import {
 import {
   enforceHostedRateLimit,
   enforceHostedRequest,
+  hostedConfigStatus,
   hostedRuntimeConfig,
   requestId,
   resolveHostedIdentity,
@@ -241,6 +242,12 @@ export function createApp(options: ServerOptions = {}) {
       archivedTaskCount: tasks.filter((task) => task.archivedAt).length,
       generatedAt: new Date().toISOString()
     });
+  });
+
+  app.get("/api/hosted/config", async (c) => {
+    await requireHosted(c);
+    await authorizeHosted(c, null);
+    return c.json(hostedConfigStatus());
   });
 
   app.get("/api/tasks", async (c) => {

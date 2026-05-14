@@ -24,6 +24,16 @@ export interface HostedRuntimeConfig {
   rateLimitMax: number;
 }
 
+export interface HostedConfigStatus {
+  mode: "hosted";
+  ready: boolean;
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
+  authMode: HostedAuthMode;
+  rateLimitWindowMs: number;
+  rateLimitMax: number;
+  structuredLogs: boolean;
+}
+
 export interface HostedRequestContext {
   identity: HostedIdentity;
   requestId: string;
@@ -43,6 +53,46 @@ export function hostedRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Hoste
     workosJwksUrl: env.WORKOS_JWKS_URL?.trim() || (clientId ? `https://api.workos.com/sso/jwks/${clientId}` : ""),
     rateLimitWindowMs: parsePositiveInteger(env.UNBLOCK_RATE_LIMIT_WINDOW_MS, 60_000),
     rateLimitMax: parsePositiveInteger(env.UNBLOCK_RATE_LIMIT_MAX, 600)
+  };
+}
+
+export function hostedConfigStatus(env: NodeJS.ProcessEnv = process.env): HostedConfigStatus {
+  const config = hostedRuntimeConfig(env);
+  const checks = [
+    {
+      name: "storage_mode",
+      ok: ["hosted"].includes((env.UNBLOCK_BACKEND ?? env.UNBLOCK_STORAGE_MODE ?? "").trim().toLowerCase()),
+      detail: "UNBLOCK_BACKEND or UNBLOCK_STORAGE_MODE must be hosted."
+    },
+    {
+      name: "postgres_url",
+      ok: Boolean(env.UNBLOCK_POSTGRES_URL?.trim()),
+      detail: "UNBLOCK_POSTGRES_URL must point at the hosted Postgres database."
+    },
+    {
+      name: "workos_client",
+      ok: config.authMode === "trusted-headers" || Boolean(config.workosClientId),
+      detail: "WORKOS_CLIENT_ID is required for WorkOS JWT verification."
+    },
+    {
+      name: "workos_jwks",
+      ok: config.authMode === "trusted-headers" || Boolean(config.workosJwksUrl),
+      detail: "WORKOS_JWKS_URL may override the default WorkOS JWKS URL."
+    },
+    {
+      name: "secret_key",
+      ok: secretKeyLooksValid(env.UNBLOCK_HOSTED_SECRET_KEY),
+      detail: "UNBLOCK_HOSTED_SECRET_KEY must decode to a 32-byte encryption key."
+    }
+  ];
+  return {
+    mode: "hosted",
+    ready: checks.every((check) => check.ok),
+    checks,
+    authMode: config.authMode,
+    rateLimitWindowMs: config.rateLimitWindowMs,
+    rateLimitMax: config.rateLimitMax,
+    structuredLogs: env.UNBLOCK_STRUCTURED_LOGS !== "false"
   };
 }
 
@@ -178,6 +228,13 @@ function requiredHeader(headers: Headers, name: string): string {
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function secretKeyLooksValid(value: string | undefined): boolean {
+  const raw = value?.trim();
+  if (!raw) return false;
+  const bytes = raw.startsWith("base64:") ? Buffer.from(raw.slice("base64:".length), "base64") : Buffer.from(raw, "hex");
+  return bytes.length === 32;
 }
 
 function permissionSubject(permission: HostedPermission): SubjectType {

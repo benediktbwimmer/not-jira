@@ -143,6 +143,37 @@ describe("hosted authorization", () => {
       taskCount: 0
     });
   });
+
+  it("reports redacted hosted deployment configuration status", async () => {
+    const previous = {
+      backend: process.env.UNBLOCK_BACKEND,
+      postgres: process.env.UNBLOCK_POSTGRES_URL,
+      key: process.env.UNBLOCK_HOSTED_SECRET_KEY,
+      authMode: process.env.UNBLOCK_HOSTED_AUTH_MODE,
+      structuredLogs: process.env.UNBLOCK_STRUCTURED_LOGS
+    };
+    process.env.UNBLOCK_BACKEND = "hosted";
+    process.env.UNBLOCK_POSTGRES_URL = "postgres://example";
+    process.env.UNBLOCK_HOSTED_SECRET_KEY = randomBytes(32).toString("hex");
+    process.env.UNBLOCK_HOSTED_AUTH_MODE = "trusted-headers";
+    process.env.UNBLOCK_STRUCTURED_LOGS = "false";
+    const store = await seededStore();
+    const app = createApp({ backend: "hosted", storeFactory: () => store, hostedAuth });
+
+    try {
+      const config = await app.request("/api/hosted/config", { headers: hostedHeaders("admin") });
+      expect(config.status).toBe(200);
+      const body = await config.json() as any;
+      expect(body.ready).toBe(true);
+      expect(JSON.stringify(body)).not.toContain(process.env.UNBLOCK_HOSTED_SECRET_KEY);
+    } finally {
+      restoreEnv("UNBLOCK_BACKEND", previous.backend);
+      restoreEnv("UNBLOCK_POSTGRES_URL", previous.postgres);
+      restoreEnv("UNBLOCK_HOSTED_SECRET_KEY", previous.key);
+      restoreEnv("UNBLOCK_HOSTED_AUTH_MODE", previous.authMode);
+      restoreEnv("UNBLOCK_STRUCTURED_LOGS", previous.structuredLogs);
+    }
+  });
 });
 
 async function seededStore(): Promise<AppStore> {
@@ -170,4 +201,12 @@ function hostedHeaders(role: string): Record<string, string> {
     "x-unblock-workos-organization-id": "org_hosted",
     "x-unblock-roles": role
   };
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }
