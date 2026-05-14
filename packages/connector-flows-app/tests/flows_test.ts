@@ -9,14 +9,23 @@ Deno.test("hosted Unblock connector Flow app builds", () => {
   app.flow("unblock-connector-dispatch");
   app.flow("github-issues-inbound");
   app.flow("github-issues-outbound");
+  app.flow("github-issues-reconcile");
   app.assertPermissionManifest({
     connections: ["unblock-hosted-api", "mock-external", "github-api"],
-    jobs: ["mockConnectorApply", "normalizeGitHubIssueWebhook", "prepareGitHubIssueOutbound", "finalizeGitHubIssueOutbound"],
+    jobs: [
+      "mockConnectorApply",
+      "normalizeGitHubIssueWebhook",
+      "prepareGitHubIssueOutbound",
+      "finalizeGitHubIssueOutbound",
+      "prepareGitHubIssueBackfill",
+      "normalizeGitHubIssueBackfill",
+    ],
     secrets: ["UNBLOCK_HOSTED_API_TOKEN", "MOCK_CONNECTOR_TOKEN", "GITHUB_INSTALLATION_TOKEN"],
   });
   app.assertGraphContains("unblock-connector-dispatch", ["trigger", "deno", "http"]);
   app.assertGraphContains("github-issues-inbound", ["trigger", "deno", "http"]);
   app.assertGraphContains("github-issues-outbound", ["trigger", "deno", "http"]);
+  app.assertGraphContains("github-issues-reconcile", ["trigger", "deno", "http"]);
 });
 
 Deno.test("hosted Unblock connector Flow app simulates manual dispatch", () => {
@@ -49,6 +58,29 @@ Deno.test("hosted Unblock connector Flow app simulates manual dispatch", () => {
   }
   if (!simulation.events.some((event) => event.kind === "http_request")) {
     throw new Error("manual connector simulation did not include Unblock inbox HTTP evidence");
+  }
+});
+
+Deno.test("hosted Unblock GitHub reconcile Flow polls with cursor evidence", () => {
+  const simulation = app.simulateTrigger({
+    flowId: "github-issues-reconcile",
+    triggerKind: "manual",
+    payload: {
+      tenantId: "TENANT",
+      projectId: "PROJECT",
+      connectionId: "github-main",
+      cursor: "2026-05-14T00:00:00Z",
+      reason: "test",
+    },
+  });
+
+  const httpRequests = simulation.events.filter((event) => event.kind === "http_request");
+  const denoJobs = simulation.events.filter((event) => event.kind === "deno_job");
+  if (httpRequests.length < 4) {
+    throw new Error("GitHub reconcile simulation did not include config lookup, GitHub poll, inbox writes, and cursor write");
+  }
+  if (denoJobs.length < 2) {
+    throw new Error("GitHub reconcile simulation did not include prepare and normalize jobs");
   }
 });
 

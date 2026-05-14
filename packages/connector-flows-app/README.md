@@ -18,10 +18,15 @@ Current fixture:
 - `github-issues-outbound`: Unblock outbox-triggered task sync to GitHub Issues
   with task/config lookup, rate-limited GitHub API calls, idempotency, and
   mapping writeback.
+- `github-issues-reconcile`: manual and scheduled GitHub issue backfill/polling
+  that reuses the same mapping/inbox path and advances a durable cursor only
+  after Unblock writes are requested.
 - `normalizeGitHubIssueWebhook`: deterministic webhook normalizer that converts
   GitHub issue payloads into typed Unblock connector events and mapping writes.
 - `prepareGitHubIssueOutbound` / `finalizeGitHubIssueOutbound`: deterministic
   request shaping and mapping finalization for outbound GitHub sync.
+- `prepareGitHubIssueBackfill` / `normalizeGitHubIssueBackfill`: deterministic
+  polling request shaping and issue list normalization for reconciliation.
 - `unblock-hosted-api`: redacted bearer-token connection to hosted Unblock.
 - `github-api`: rate-limited GitHub REST API connection for installation-token
   issue writes.

@@ -38,6 +38,39 @@ export const githubOutboundFinalizeResultSchema = schemas.object({
   mapping: schemas.record(schemas.unknown()),
 });
 
+export const githubReconcileInputSchema = schemas.object({
+  tenantId: schemas.string(),
+  projectId: schemas.string(),
+  connectionId: schemas.string(),
+  cursor: schemas.string().optional(),
+  reason: schemas.string().optional(),
+});
+
+export const githubBackfillPrepareInputSchema = schemas.object({
+  input: githubReconcileInputSchema,
+  connections: schemas.array(schemas.record(schemas.unknown())),
+});
+
+export const githubBackfillPreparedSchema = schemas.object({
+  request: schemas.record(schemas.unknown()),
+  connection: schemas.record(schemas.unknown()),
+  scope: schemas.record(schemas.unknown()),
+  cursorName: schemas.string(),
+});
+
+export const githubBackfillNormalizeInputSchema = schemas.object({
+  prepared: githubBackfillPreparedSchema,
+  response: schemas.array(schemas.record(schemas.unknown())),
+});
+
+export const githubBackfillNormalizeResultSchema = schemas.object({
+  items: schemas.array(schemas.object({
+    event: schemas.record(schemas.unknown()),
+    mapping: schemas.record(schemas.unknown()),
+  })),
+  cursorEvent: schemas.record(schemas.unknown()),
+});
+
 job("normalizeGitHubIssueWebhook", {
   runtime: "deno",
   batch: { mode: "scalar" },
@@ -101,6 +134,103 @@ job("normalizeGitHubIssueWebhook", {
         task: taskPayload(issue, taskId),
       },
       mapping: issueMapping(input, owner, repo, issue, taskId, "active"),
+    };
+  },
+});
+
+job("prepareGitHubIssueBackfill", {
+  runtime: "deno",
+  batch: { mode: "scalar" },
+  input: githubBackfillPrepareInputSchema,
+  output: githubBackfillPreparedSchema,
+  permissions: { net: [], secrets: [], imports: [] },
+  run: ({ input }: { input: any }) => {
+    const connection = input.connections.find((item: any) => item.id === input.input.connectionId) ?? input.connections[0];
+    if (!connection?.metadata) {
+      throw new Error(`No GitHub connection metadata available for ${input.input.connectionId}`);
+    }
+    const metadata = connection.metadata;
+    const query = new URLSearchParams({ state: "all", per_page: "100" });
+    if (input.input.cursor) {
+      query.set("since", input.input.cursor);
+    }
+    return {
+      request: {
+        method: "GET",
+        path: `/repos/${encodeURIComponent(metadata.repositoryOwner)}/${encodeURIComponent(metadata.repositoryName)}/issues?${query.toString()}`,
+      },
+      connection,
+      scope: {
+        tenantId: input.input.tenantId,
+        projectId: input.input.projectId,
+        connectionId: input.input.connectionId,
+        provider: "github",
+      },
+      cursorName: "issues.updated_at",
+    };
+  },
+});
+
+job("normalizeGitHubIssueBackfill", {
+  runtime: "deno",
+  batch: { mode: "scalar" },
+  input: githubBackfillNormalizeInputSchema,
+  output: githubBackfillNormalizeResultSchema,
+  permissions: { net: [], secrets: [], imports: [] },
+  run: ({ input }: { input: any }) => {
+    const connection = input.prepared.connection;
+    const metadata = connection.metadata;
+    const issues = input.response.filter((issue: any) => !issue.pull_request);
+    const items = issues.map((issue: any) => {
+      const taskId = `GH-${issue.number}`;
+      const external = {
+        system: "github",
+        kind: "issue",
+        id: `${metadata.repositoryOwner}/${metadata.repositoryName}#${issue.number}`,
+        url: issue.html_url,
+      };
+      const event = {
+        id: `github:backfill:${external.id}:${issue.updated_at}`,
+        kind: issue.state === "closed" ? "connector.inbound.task_archived" : "connector.inbound.task_upserted",
+        scope: input.prepared.scope,
+        correlationId: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:external:github:issue:${external.id}`,
+        idempotencyKey: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-backfill:${external.id}:${issue.updated_at}`,
+        local: { kind: "task", id: taskId },
+        external,
+        task: taskPayload(issue, taskId),
+        evidence: {
+          source: "github-backfill",
+          githubUpdatedAt: issue.updated_at,
+        },
+        occurredAt: new Date().toISOString(),
+      };
+      return {
+        event,
+        mapping: issueMappingFromConnection(input.prepared.scope.projectId, connection, issue, taskId, {
+          source: "github-backfill",
+        }),
+      };
+    });
+    const observedAt = newestUpdatedAt(issues) ?? new Date().toISOString();
+    return {
+      items,
+      cursorEvent: {
+        id: `github:cursor:${input.prepared.scope.connectionId}:${observedAt}`,
+        kind: "connector.cursor.updated",
+        scope: input.prepared.scope,
+        correlationId: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:connection:${input.prepared.scope.connectionId}`,
+        idempotencyKey: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-cursor:${observedAt}`,
+        cursor: {
+          name: input.prepared.cursorName,
+          value: observedAt,
+          observedAt,
+        },
+        evidence: {
+          source: "github-backfill",
+          itemCount: issues.length,
+        },
+        occurredAt: new Date().toISOString(),
+      },
     };
   },
 });
@@ -216,6 +346,33 @@ function issueMapping(input: any, owner: string, repo: string, issue: any, taskI
       githubAction: input.payload.action ?? "unknown",
     },
   };
+}
+
+function issueMappingFromConnection(projectId: string, connection: any, issue: any, taskId: string, metadata: Record<string, unknown>) {
+  return {
+    projectId,
+    connectionId: connection.id,
+    repositoryOwner: connection.metadata.repositoryOwner,
+    repositoryName: connection.metadata.repositoryName,
+    issueNumber: Number(issue.number),
+    issueNodeId: issue.node_id ?? undefined,
+    issueUrl: issue.html_url,
+    taskId,
+    externalVersion: issue.updated_at ?? null,
+    localVersion: null,
+    syncDirection: connection.metadata.syncDirection ?? "bidirectional",
+    conflictPolicy: connection.metadata.conflictPolicy ?? "operator_review",
+    status: "active",
+    metadata,
+  };
+}
+
+function newestUpdatedAt(issues: any[]): string | null {
+  return issues
+    .map((issue) => issue.updated_at)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort()
+    .at(-1) ?? null;
 }
 
 function parseIssueNumber(value: unknown): number | null {
