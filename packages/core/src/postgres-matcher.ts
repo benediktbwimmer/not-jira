@@ -5,15 +5,21 @@ import type { TaskListFilters } from "./types.js";
 
 type Direction = "upstream" | "downstream";
 
+interface LowerContext {
+  projectPlaceholder: string;
+}
+
 export function lowerPostgresMatcherTaskIds(projectId: string, query: string, filters: Omit<TaskListFilters, "where"> = {}): MatcherLoweringResult {
   const plan = parseMatcherPlan(query, filters);
   const builder = new SqlBuilder(1);
-  const conditions = ["t.tenant_id = $1", builder.param(projectId, "t.project_id = $")];
+  const projectPlaceholder = builder.placeholder(projectId);
+  const context = { projectPlaceholder };
+  const conditions = ["t.tenant_id = $1", `t.project_id = ${projectPlaceholder}`];
   conditions.push("t.archived_at is null");
   if (!plan.filters.includeFinished) {
     conditions.push("t.lifecycle != 'finished'");
   }
-  conditions.push(lowerNode(plan.ast, builder));
+  conditions.push(lowerNode(plan.ast, builder, context));
 
   return {
     dialect: "postgres",
@@ -29,21 +35,21 @@ export function lowerPostgresMatcherTaskIds(projectId: string, query: string, fi
   };
 }
 
-function lowerNode(node: QueryNode, builder: SqlBuilder): string {
+function lowerNode(node: QueryNode, builder: SqlBuilder, context: LowerContext): string {
   if (node.type === "and") {
-    return node.nodes.map((child) => `(${lowerNode(child, builder)})`).join(" and ");
+    return node.nodes.map((child) => `(${lowerNode(child, builder, context)})`).join(" and ");
   }
   if (node.type === "or") {
-    return node.nodes.map((child) => `(${lowerNode(child, builder)})`).join(" or ");
+    return node.nodes.map((child) => `(${lowerNode(child, builder, context)})`).join(" or ");
   }
   if (node.type === "not") {
-    return `not (${lowerNode(node.node, builder)})`;
+    return `not (${lowerNode(node.node, builder, context)})`;
   }
   if (node.type === "field") return lowerField(node, builder);
   if (node.type === "time") return lowerTime(node, builder);
   if (node.type === "comment") return lowerComment(node, builder);
-  if (node.type === "graph") return lowerGraph(node, builder);
-  return lowerHierarchy(node, builder);
+  if (node.type === "graph") return lowerGraph(node, builder, context);
+  return lowerHierarchy(node, builder, context);
 }
 
 function lowerField(predicate: FieldPredicate, builder: SqlBuilder): string {
@@ -67,29 +73,33 @@ function lowerField(predicate: FieldPredicate, builder: SqlBuilder): string {
 }
 
 function lowerFieldEquality(field: FieldPredicate["field"], value: string, builder: SqlBuilder): string {
-  if (field === "id") return builder.param(value.toUpperCase(), "upper(t.id) = $");
-  if (field === "id prefix") return builder.param(`${value.toUpperCase()}%`, "upper(t.id) like $");
+  if (field === "id") return builder.param(value.toUpperCase(), "t.id = $");
+  if (field === "id prefix") return builder.param(`${value.toUpperCase()}%`, "t.id like $");
   if (field === "tag") {
-    const tag = builder.add(value.toUpperCase());
+    const tagId = builder.add(value.toUpperCase());
+    const tagName = builder.add(value.toLowerCase());
     return `
       exists (
         select 1 from task_tags tt
         join tags tg on tg.tenant_id = tt.tenant_id and tg.project_id = tt.project_id and tg.id = tt.tag_id
         where tt.tenant_id = t.tenant_id and tt.project_id = t.project_id and tt.task_id = t.id
           and tg.archived_at is null
-          and (upper(tg.id) = $${tag} or upper(tg.name) = $${tag})
+          and (tg.id = $${tagId} or lower(tg.name) = $${tagName})
       )
     `;
   }
   if (field === "assigned") {
-    const assigned = builder.add(value.toLowerCase());
+    const actorRef = parseActorRef(value);
+    const actor = builder.add(actorRef.actor);
+    const machineClause = actorRef.machine ? `and lower(tr.machine) = $${builder.add(actorRef.machine)}` : "";
     return `
       exists (
         select 1 from track_assignments ta
         join tracks tr on tr.tenant_id = ta.tenant_id and tr.project_id = ta.project_id and tr.id = ta.track_id
         where ta.tenant_id = t.tenant_id and ta.project_id = t.project_id and ta.task_id = t.id
           and tr.archived_at is null
-          and (lower(tr.actor) = $${assigned} or lower(tr.machine || ':' || tr.actor) = $${assigned})
+          and lower(tr.actor) = $${actor}
+          ${machineClause}
       )
     `;
   }
@@ -110,7 +120,7 @@ function lowerFieldEquality(field: FieldPredicate["field"], value: string, build
   if (field === "parent") {
     return value.toLowerCase() === "root"
       ? "t.parent_task_id is null"
-      : builder.param(value.toUpperCase(), "upper(t.parent_task_id) = $");
+      : builder.param(value.toUpperCase(), "t.parent_task_id = $");
   }
   if (field === "source doc") return builder.param(value.toLowerCase(), "lower(t.source_doc) = $");
   if (field === "source section") return builder.param(value.toLowerCase(), "lower(t.source_section) = $");
@@ -134,13 +144,18 @@ function lowerTime(predicate: TimePredicate, builder: SqlBuilder): string {
 
 function lowerComment(predicate: Extract<QueryNode, { type: "comment" }>, builder: SqlBuilder): string {
   if (predicate.relation === "by") {
-    const expected = builder.add(String(predicate.value).toLowerCase());
+    const actorRef = parseActorRef(String(predicate.value));
+    const actor = builder.add(actorRef.actor);
+    const machineClause = actorRef.machine
+      ? `and lower(c.machine) = $${builder.add(actorRef.machine)}`
+      : `and lower(c.machine || ':' || c.actor) = $${builder.add(String(predicate.value).toLowerCase())}`;
     return `
       exists (
         select 1 from comments c
         where c.tenant_id = t.tenant_id and c.project_id = t.project_id and c.task_id = t.id
           and c.archived_at is null
-          and lower(c.machine || ':' || c.actor) = $${expected}
+          and lower(c.actor) = $${actor}
+          ${machineClause}
       )
     `;
   }
@@ -155,39 +170,44 @@ function lowerComment(predicate: Extract<QueryNode, { type: "comment" }>, builde
   `;
 }
 
-function lowerHierarchy(predicate: HierarchyPredicate, builder: SqlBuilder): string {
+function lowerHierarchy(predicate: HierarchyPredicate, builder: SqlBuilder, context: LowerContext): string {
   const target = builder.add(predicate.taskId.toUpperCase());
   return `
     t.id in (
       with recursive walk(id) as (
         select child.id
         from tasks child
-        where child.tenant_id = t.tenant_id and child.project_id = t.project_id
-          and child.archived_at is null and upper(child.parent_task_id) = $${target}
+        where child.tenant_id = $1 and child.project_id = ${context.projectPlaceholder}
+          and child.archived_at is null and child.parent_task_id = $${target}
         union
         select child.id
         from tasks child
         join walk w on child.parent_task_id = w.id
-        where child.tenant_id = t.tenant_id and child.project_id = t.project_id and child.archived_at is null
+        where child.tenant_id = $1 and child.project_id = ${context.projectPlaceholder} and child.archived_at is null
       )
       select id from walk
     )
   `;
 }
 
-function lowerGraph(predicate: GraphPredicate, builder: SqlBuilder): string {
+function lowerGraph(predicate: GraphPredicate, builder: SqlBuilder, context: LowerContext): string {
   const direction: Direction = predicate.verb === "depends on" ? "upstream" : "downstream";
-  const graph = graphReachableSql(direction);
   if (predicate.targetId) {
     const target = builder.add(predicate.targetId.toUpperCase());
     const depth = predicate.depth ? `and ${compareNumeric("depth", predicate.depth.op, predicate.depth.value)}` : "";
-    return `exists (${graph} select 1 from walk where upper(id) = $${target} ${depth})`;
+    return `
+      t.id in (
+        ${graphCandidatesForTargetSql(predicate.verb, context)}
+        select id from walk where true ${depth}
+      )
+    `.replaceAll("__TARGET__", `$${target}`);
   }
+  const graph = graphReachableSql(direction, context);
   const countRule = predicate.count ?? { op: ">" as const, value: 0 };
   return `(select count(*) from (${graph} select distinct id from walk) reachable) ${countRule.op} ${builder.placeholder(countRule.value)}`;
 }
 
-function graphReachableSql(direction: Direction): string {
+function graphReachableSql(direction: Direction, context: LowerContext): string {
   const dependencyFrom = direction === "upstream" ? "d.task_id" : "d.depends_on_task_id";
   const dependencyTo = direction === "upstream" ? "d.depends_on_task_id" : "d.task_id";
   const hierarchyFrom = direction === "upstream" ? "parent.id" : "child.id";
@@ -198,13 +218,13 @@ function graphReachableSql(direction: Direction): string {
       from task_dependencies d
       join tasks source_task on source_task.tenant_id = d.tenant_id and source_task.project_id = d.project_id and source_task.id = d.task_id
       join tasks dependency_task on dependency_task.tenant_id = d.tenant_id and dependency_task.project_id = d.project_id and dependency_task.id = d.depends_on_task_id
-      where d.tenant_id = t.tenant_id and d.project_id = t.project_id
+      where d.tenant_id = $1 and d.project_id = ${context.projectPlaceholder}
         and source_task.archived_at is null and dependency_task.archived_at is null
       union all
       select ${hierarchyFrom}, ${hierarchyTo}
       from tasks parent
       join tasks child on child.tenant_id = parent.tenant_id and child.project_id = parent.project_id and child.parent_task_id = parent.id
-      where parent.tenant_id = t.tenant_id and parent.project_id = t.project_id
+      where parent.tenant_id = $1 and parent.project_id = ${context.projectPlaceholder}
         and parent.archived_at is null and child.archived_at is null
     ),
     walk(id, depth, path) as (
@@ -216,6 +236,39 @@ function graphReachableSql(direction: Direction): string {
       from walk w
       join edges e on e.from_id = w.id
       where not e.to_id = any(w.path)
+    )
+  `;
+}
+
+function graphCandidatesForTargetSql(verb: GraphPredicate["verb"], context: LowerContext): string {
+  const seedId = verb === "depends on" ? "e.from_id" : "e.to_id";
+  const seedWhere = verb === "depends on" ? "e.to_id = __TARGET__" : "e.from_id = __TARGET__";
+  const recursiveId = verb === "depends on" ? "e.from_id" : "e.to_id";
+  const recursiveJoin = verb === "depends on" ? "e.to_id = w.id" : "e.from_id = w.id";
+  return `
+    with recursive edges(from_id, to_id) as (
+      select d.task_id, d.depends_on_task_id
+      from task_dependencies d
+      join tasks source_task on source_task.tenant_id = d.tenant_id and source_task.project_id = d.project_id and source_task.id = d.task_id
+      join tasks dependency_task on dependency_task.tenant_id = d.tenant_id and dependency_task.project_id = d.project_id and dependency_task.id = d.depends_on_task_id
+      where d.tenant_id = $1 and d.project_id = ${context.projectPlaceholder}
+        and source_task.archived_at is null and dependency_task.archived_at is null
+      union all
+      select parent.id, child.id
+      from tasks parent
+      join tasks child on child.tenant_id = parent.tenant_id and child.project_id = parent.project_id and child.parent_task_id = parent.id
+      where parent.tenant_id = $1 and parent.project_id = ${context.projectPlaceholder}
+        and parent.archived_at is null and child.archived_at is null
+    ),
+    walk(id, depth, path) as (
+      select ${seedId}, 1, array[__TARGET__, ${seedId}]
+      from edges e
+      where ${seedWhere}
+      union all
+      select ${recursiveId}, w.depth + 1, w.path || ${recursiveId}
+      from walk w
+      join edges e on ${recursiveJoin}
+      where not ${recursiveId} = any(w.path)
     )
   `;
 }
@@ -296,6 +349,13 @@ function durationMs(amount: number, unit: "m" | "h" | "d" | "w"): number {
   if (unit === "h") return amount * 60 * minute;
   if (unit === "d") return amount * 24 * 60 * minute;
   return amount * 7 * 24 * 60 * minute;
+}
+
+function parseActorRef(value: string): { machine: string | null; actor: string } {
+  const normalized = value.toLowerCase();
+  const separator = normalized.indexOf(":");
+  if (separator < 0) return { machine: null, actor: normalized };
+  return { machine: normalized.slice(0, separator), actor: normalized.slice(separator + 1) };
 }
 
 function orderBy(plan: MatcherPlan): string {

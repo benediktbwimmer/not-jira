@@ -302,5 +302,35 @@ export const postgresMigrations: StoreMigration[] = [
       create index if not exists inbox_events_status_idx on inbox_events(tenant_id, project_id, status, created_at);
       create index if not exists inbox_events_type_idx on inbox_events(tenant_id, project_id, event_type, created_at desc);
     `
+  },
+  {
+    id: "pg0002",
+    name: "postgres matcher hot path indexes",
+    sql: `
+      create index if not exists tasks_active_created_idx
+        on tasks(tenant_id, project_id, created_at asc, id asc)
+        where archived_at is null;
+      create index if not exists tasks_active_priority_idx
+        on tasks(tenant_id, project_id, priority desc, created_at asc, id asc)
+        where archived_at is null;
+      create index if not exists tasks_active_source_lower_idx
+        on tasks(tenant_id, project_id, lower(source_doc), lower(source_section))
+        where archived_at is null;
+      create index if not exists tags_lower_name_idx
+        on tags(tenant_id, project_id, lower(name))
+        where archived_at is null;
+      create index if not exists tracks_lower_actor_idx
+        on tracks(tenant_id, project_id, lower(actor))
+        where archived_at is null;
+      create index if not exists tracks_lower_actor_ref_idx
+        on tracks(tenant_id, project_id, lower(machine), lower(actor))
+        where archived_at is null;
+      create index if not exists comments_active_task_created_idx
+        on comments(tenant_id, project_id, task_id, created_at)
+        where archived_at is null;
+      create index if not exists comments_active_actor_task_idx
+        on comments(tenant_id, project_id, lower(machine), lower(actor), task_id, created_at)
+        where archived_at is null;
+    `
   }
 ];
