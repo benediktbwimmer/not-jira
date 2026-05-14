@@ -1259,6 +1259,8 @@ export const instructionSelectorCatalog = Unblock.surface.view("instructionSelec
     selector_fragment_id: z.string().nullable(),
     selector_fragment_hash: z.string().nullable(),
     body: z.string(),
+    enabled: z.boolean(),
+    archived_at: z.string().nullable(),
   }))
   .select((instruction: any) => ({
     project_id: instruction.project_id,
@@ -1268,6 +1270,8 @@ export const instructionSelectorCatalog = Unblock.surface.view("instructionSelec
     selector_fragment_id: instruction.selector_fragment_id,
     selector_fragment_hash: instruction.selector_fragment_hash,
     body: instruction.body,
+    enabled: instruction.enabled,
+    archived_at: instruction.archived_at,
   }))
   .materialized("daemon");
 

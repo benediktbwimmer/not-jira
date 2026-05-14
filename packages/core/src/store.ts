@@ -27,6 +27,7 @@ export interface TaskRepository {
   get(projectId: string, id: string): Promise<Task | null>;
   create(task: Task): Promise<void>;
   update(task: Task): Promise<void>;
+  updateWithPrevious?(previous: Task, task: Task): Promise<void>;
   delete(projectId: string, id: string): Promise<void>;
 }
 
@@ -34,6 +35,14 @@ export interface DependencyRepository {
   list(projectId?: string): Promise<Dependency[]>;
   listForTask(projectId: string, taskId: string): Promise<Dependency[]>;
   listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]>;
+  inspectAdd?(projectId: string, taskId: string, dependsOnTaskId: string): Promise<{
+    task: { id: string; archivedAt: string | null } | null;
+    dependsOnTask: { id: string; archivedAt: string | null } | null;
+    exists: boolean;
+    createsDependencyCycle: boolean;
+    taskContainsDependsOnTask: boolean;
+    dependsOnTaskContainsTask: boolean;
+  }>;
   hasDependency?(projectId: string, taskId: string, dependsOnTaskId: string): Promise<boolean>;
   hasDependencyPath?(projectId: string, fromTaskId: string, toTaskId: string): Promise<boolean>;
   hasHierarchyPath?(projectId: string, ancestorTaskId: string, descendantTaskId: string): Promise<boolean>;
@@ -110,6 +119,10 @@ export interface MigrationRepository {
 
 export interface MatcherQueryRepository {
   matchTaskIds(projectId: string, query: string, filters?: Omit<TaskListFilters, "where">): Promise<string[]>;
+  matchingInstructionIds?(
+    projectId: string,
+    filters?: Omit<TaskListFilters, "where">
+  ): Promise<Array<{ instructionId: string; taskId: string }>>;
   matchTaskIdsByInstructionQuery?(
     projectId: string,
     instructions: Instruction[],

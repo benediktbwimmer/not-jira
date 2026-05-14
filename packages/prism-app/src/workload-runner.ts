@@ -455,7 +455,7 @@ async function runMixedOperation(
       const dependencyIndex = taskIndex > 0 ? Math.max(0, taskIndex - 3) : 1;
       const dependencyTask = workload.tasks[dependencyIndex];
       if (!dependencyTask || dependencyTask.id === task.id) return "dependency.add.skipped";
-      await services.dependencies.addMany([{ taskId: task.id, dependsOnTaskId: dependencyTask.id }]);
+      await services.dependencies.add(task.id, dependencyTask.id);
       return "dependency.add";
     }
     case 3:

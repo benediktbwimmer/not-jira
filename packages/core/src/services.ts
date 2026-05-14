@@ -443,7 +443,11 @@ export class TaskService {
       }
       ensureFinishedParentDoesNotContainUnfinishedChild(parent ?? null, next);
       await ensureTaskCanBeFinished(repos, next);
-      await repos.tasks.update(next);
+      if (repos.tasks.updateWithPrevious) {
+        await repos.tasks.updateWithPrevious(existing, next);
+      } else {
+        await repos.tasks.update(next);
+      }
       await repos.activity.append(this.activity.make(this.projectId, "task.updated", "task", taskId, `Updated ${taskId}`, { input: parsed }));
       if (existing.lifecycle !== next.lifecycle) {
         await repos.activity.append(this.activity.make(this.projectId, `task.${next.lifecycle}`, "task", taskId, `Set ${taskId} ${next.lifecycle}`, { from: existing.lifecycle, to: next.lifecycle }));
@@ -497,7 +501,11 @@ export class TaskService {
         updatedAt: now,
         version: task.version + 1
       };
-      await repos.tasks.update(updated);
+      if (repos.tasks.updateWithPrevious) {
+        await repos.tasks.updateWithPrevious(task, updated);
+      } else {
+        await repos.tasks.update(updated);
+      }
       await repos.comments.create(comment);
       await repos.activity.append(this.activity.make(this.projectId, "comment.created", "comment", comment.id, `Commented on ${taskId}`, { taskId }));
       await repos.activity.append(this.activity.make(this.projectId, "task.released", "task", taskId, `Released ${taskId}`, { from: "started", to: "open", reason, commentId: comment.id, taskId }));
@@ -511,7 +519,11 @@ export class TaskService {
     return this.store.transaction(async (repos) => {
       const task = await repos.tasks.get(this.projectId, taskId) ?? notFound("task", taskId);
       const updated = { ...task, archivedAt: now, updatedAt: now, version: task.version + 1 };
-      await repos.tasks.update(updated);
+      if (repos.tasks.updateWithPrevious) {
+        await repos.tasks.updateWithPrevious(task, updated);
+      } else {
+        await repos.tasks.update(updated);
+      }
       await repos.activity.append(this.activity.make(this.projectId, "task.archived", "task", taskId, `Archived ${taskId}`));
       return updated;
     });
@@ -534,7 +546,11 @@ export class TaskService {
       const updated = { ...task, archivedAt: null, updatedAt: now, version: task.version + 1 };
       const tasks = await repos.tasks.list(this.projectId);
       validateFinishedParents(tasks.map((candidate) => candidate.id === taskId ? updated : candidate));
-      await repos.tasks.update(updated);
+      if (repos.tasks.updateWithPrevious) {
+        await repos.tasks.updateWithPrevious(task, updated);
+      } else {
+        await repos.tasks.update(updated);
+      }
       await repos.activity.append(this.activity.make(this.projectId, "task.restored", "task", taskId, `Restored ${taskId}`));
       return updated;
     });
@@ -564,6 +580,40 @@ export class DependencyService {
     const dependency: Dependency = { projectId: this.projectId, taskId, dependsOnTaskId, createdAt };
 
     await this.store.transaction(async (repos) => {
+      if (repos.dependencies.inspectAdd) {
+        const inspection = await repos.dependencies.inspectAdd(this.projectId, taskId, dependsOnTaskId);
+        const task = inspection.task ?? notFound("task", taskId);
+        const dependencyTask = inspection.dependsOnTask ?? notFound("task", dependsOnTaskId);
+        if (task.archivedAt) {
+          validation("Archived tasks cannot have dependencies changed.", { taskId });
+        }
+        if (dependencyTask.archivedAt) {
+          validation("Archived tasks cannot be dependencies in V1.", { dependsOnTaskId });
+        }
+        if (inspection.exists) {
+          return;
+        }
+        if (inspection.createsDependencyCycle) {
+          conflict("Dependency would create a cycle.", { taskId });
+        }
+        if (inspection.taskContainsDependsOnTask) {
+          validation("A task cannot depend on one of its descendants because hierarchy already gates parent completion.", {
+            projectId: this.projectId,
+            taskId,
+            dependsOnTaskId,
+          });
+        }
+        if (inspection.dependsOnTaskContainsTask) {
+          validation("A task cannot depend on one of its ancestors because that would deadlock hierarchy completion.", {
+            projectId: this.projectId,
+            taskId,
+            dependsOnTaskId,
+          });
+        }
+        await repos.dependencies.add(dependency);
+        await repos.activity.append(this.activity.make(this.projectId, "dependency.added", "task", taskId, `${taskId} now depends on ${dependsOnTaskId}`, { taskId, dependsOnTaskId }));
+        return;
+      }
       await ensureTaskPair(repos, this.projectId, taskId, dependsOnTaskId);
       if (repos.dependencies.hasDependency && repos.dependencies.hasDependencyPath && repos.dependencies.hasHierarchyPath) {
         if (await repos.dependencies.hasDependency(this.projectId, taskId, dependsOnTaskId)) {
@@ -1793,6 +1843,12 @@ export class QueryService {
   }
 
   async matchingInstructionIds(): Promise<Array<{ instructionId: string; taskId: string }>> {
+    if (this.store.matcher?.matchingInstructionIds) {
+      return await this.store.matcher.matchingInstructionIds(this.projectId, {
+        includeArchived: true,
+        includeFinished: true,
+      });
+    }
     const instructions = await this.store.instructions.list(this.projectId);
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     if (this.store.matcher) {

@@ -163,6 +163,11 @@ export interface RuntimeQueryFragmentUseRecord {
   record: Record<string, unknown>;
 }
 
+interface TimedCacheEntry<T> {
+  promise: Promise<T>;
+  expiresAt: number;
+}
+
 export interface PrismTagAssignment {
   subjectRef: string;
   tagId: string;
@@ -319,8 +324,10 @@ export class PrismStore implements AppStore {
 
   private readonly transactionOperations = new AsyncLocalStorage<PrismMutation[]>();
   private readonly matcherFragments = new Map<string, Promise<AdmittedMatcherFragment>>();
+  private readonly matcherFragmentUses = new Map<string, Promise<RuntimeQueryFragmentUseRecord>>();
   private readonly matcherResultCache = new Map<string, Promise<string[]>>();
-  private readonly rowCache = new Map<string, Promise<Record<string, unknown>[]>>();
+  private readonly instructionMatchCache = new Map<string, TimedCacheEntry<Array<{ instructionId: string; taskId: string }>>>();
+  private readonly rowCache = new Map<string, TimedCacheEntry<Record<string, unknown>[]>>();
   private readonly tagReadCache = new Map<string, Promise<PrismTagAssignment[]>>();
 
   constructor(private readonly options: {
@@ -367,16 +374,8 @@ export class PrismStore implements AppStore {
   }
 
   async rows<T extends Record<string, unknown>>(surfaceId: string, replacementScope?: string): Promise<T[]> {
-    if (this.options.readMode === "materialized") {
-      return await this.readRows<T>(surfaceId, replacementScope);
-    }
     const cacheKey = `rows:${surfaceId}:${replacementScope ?? ""}:${this.options.readMode}`;
-    let pending = this.rowCache.get(cacheKey);
-    if (!pending) {
-      pending = this.readRows<T>(surfaceId, replacementScope) as Promise<Record<string, unknown>[]>;
-      this.rowCache.set(cacheKey, pending);
-    }
-    return await pending as T[];
+    return await this.cachedRows(cacheKey, async () => await this.readRows<T>(surfaceId, replacementScope));
   }
 
   private async readRows<T extends Record<string, unknown>>(surfaceId: string, replacementScope?: string): Promise<T[]> {
@@ -417,17 +416,36 @@ export class PrismStore implements AppStore {
     replacementScope: string,
     outputKey: string,
   ): Promise<T | null> {
-    const rows = await this.options.client.readMaterializedSurface<T>({
-      projectId: this.options.projectId,
-      shardId: this.options.shardId,
-      appId: "unblock",
-      surfaceId,
-      replacementScope,
-      outputKey,
-      limit: 1,
-      offset: 0,
-    });
+    const cacheKey = `output:${surfaceId}:${replacementScope}:${outputKey}`;
+    const rows = await this.cachedRows(cacheKey, async () => await this.options.client.readMaterializedSurface<T>({
+        projectId: this.options.projectId,
+        shardId: this.options.shardId,
+        appId: "unblock",
+        surfaceId,
+        replacementScope,
+        outputKey,
+        limit: 1,
+        offset: 0,
+      }));
     return rows[0] ?? null;
+  }
+
+  private async cachedRows<T extends Record<string, unknown>>(
+    cacheKey: string,
+    load: () => Promise<T[]>,
+  ): Promise<T[]> {
+    const now = Date.now();
+    const cached = this.rowCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) return await cached.promise as T[];
+    const ttlMs = this.options.readMode === "materialized" ? materializedRowCacheTtlMs() : Number.POSITIVE_INFINITY;
+    const promise = load() as Promise<Record<string, unknown>[]>;
+    this.rowCache.set(cacheKey, { promise, expiresAt: now + ttlMs });
+    try {
+      return await promise as T[];
+    } catch (error) {
+      if (this.rowCache.get(cacheKey)?.promise === promise) this.rowCache.delete(cacheKey);
+      throw error;
+    }
   }
 
   async ensureMatcherFragment(query: string): Promise<AdmittedMatcherFragment> {
@@ -471,7 +489,13 @@ export class PrismStore implements AppStore {
     };
     if (input.materializationTarget !== undefined) request.materializationTarget = input.materializationTarget;
     if (input.replacementScope !== undefined) request.replacementScope = input.replacementScope;
-    await this.options.client.upsertRuntimeQueryFragmentUse(request);
+    const useKey = hashJson(request);
+    let pendingUse = this.matcherFragmentUses.get(useKey);
+    if (!pendingUse) {
+      pendingUse = this.options.client.upsertRuntimeQueryFragmentUse(request);
+      this.matcherFragmentUses.set(useKey, pendingUse);
+    }
+    await pendingUse;
     return admitted;
   }
 
@@ -480,6 +504,16 @@ export class PrismStore implements AppStore {
     const input = fragment.lowering.input(new Date(), projectId);
     if (fragment.lowering.usesDynamicTime) {
       return await this.fetchMatcherTaskIds(fragment, input);
+    }
+    if (this.options.readMode === "materialized") {
+      await this.ensureMatcherFragmentUse({
+        query,
+        consumerKind: "unblock.matcher_query",
+        consumerId: `${projectId}:${fragment.fragmentId}`,
+        replacementScope: projectId,
+      });
+      const materialized = await this.readMaterializedMatcherTaskIds(fragment, projectId);
+      if (materialized.length > 0) return materialized;
     }
     const cacheKey = `${fragment.fragmentId}:${fragment.fragmentHash}:${hashJson(input)}:${hashJson(filters)}`;
     let pending = this.matcherResultCache.get(cacheKey);
@@ -522,6 +556,69 @@ export class PrismStore implements AppStore {
       return [query, await this.matchTaskIds(projectId, query, filters)] as const;
     }));
     return new Map(entries);
+  }
+
+  async matchingInstructionIds(projectId: string, filters: Record<string, unknown> = {}): Promise<Array<{ instructionId: string; taskId: string }>> {
+    if (this.options.readMode !== "materialized") {
+      const instructions = (await this.instructions.list(projectId)).filter((instruction) => instruction.enabled && !instruction.archivedAt);
+      const taskIdsByQuery = await this.matchTaskIdsByInstructionQuery(projectId, instructions, filters);
+      return instructionTaskMatches(instructions, taskIdsByQuery);
+    }
+
+    const cacheKey = `instructionMatches:${projectId}:${hashJson(filters)}`;
+    const now = Date.now();
+    const cached = this.instructionMatchCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) return await cached.promise;
+    const promise = this.computeMaterializedInstructionIds(projectId, filters);
+    this.instructionMatchCache.set(cacheKey, {
+      promise,
+      expiresAt: now + materializedRowCacheTtlMs(),
+    });
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.instructionMatchCache.get(cacheKey)?.promise === promise) this.instructionMatchCache.delete(cacheKey);
+      throw error;
+    }
+  }
+
+  private async computeMaterializedInstructionIds(projectId: string, filters: Record<string, unknown>): Promise<Array<{ instructionId: string; taskId: string }>> {
+    const catalog = await this.rows<InstructionSelectorCatalogRow>("instructionSelectorCatalog", projectId);
+    const activeRows = catalog.filter((row) =>
+      row.project_id === projectId
+      && row.enabled
+      && row.archived_at === null
+      && row.selector_fragment_id
+    );
+    if (activeRows.length === 0) return [];
+
+    const fragmentIdsByQuery = new Map<string, string>();
+    for (const row of activeRows) {
+      if (row.selector_fragment_id) fragmentIdsByQuery.set(row.selector_text, row.selector_fragment_id);
+    }
+    const taskIdsByQuery = new Map(await Promise.all([...fragmentIdsByQuery].map(async ([query, fragmentId]) =>
+      [query, await this.materializedInstructionTaskIdsForQuery(projectId, query, fragmentId, filters)] as const
+    )));
+    const matches: Array<{ instructionId: string; taskId: string }> = [];
+    for (const row of activeRows) {
+      for (const taskId of taskIdsByQuery.get(row.selector_text) ?? []) {
+        matches.push({ instructionId: row.instruction_id, taskId });
+      }
+    }
+    return matches.sort((a, b) => a.instructionId.localeCompare(b.instructionId) || a.taskId.localeCompare(b.taskId));
+  }
+
+  private async materializedInstructionTaskIdsForQuery(
+    projectId: string,
+    query: string,
+    fragmentId: string,
+    filters: Record<string, unknown>,
+  ): Promise<string[]> {
+    const fragment = lowerMatcherQueryToPrismFragment(query, this.options.matcherFragmentLoweringOptions);
+    if (fragment.usesDynamicTime || fragment.fragmentId !== fragmentId) {
+      return await this.matchTaskIds(projectId, query, filters);
+    }
+    return await this.readMaterializedMatcherTaskIdsBySurfaceId(fragmentId, projectId);
   }
 
   projectId(): string {
@@ -580,8 +677,10 @@ export class PrismStore implements AppStore {
   private invalidateReadCaches(operations: PrismMutation[]): void {
     const surfaces = new Set<string>();
     let clearMatcherResults = false;
+    let clearInstructionMatches = false;
     let clearTagReads = false;
     let clearAllRows = false;
+    const changedTagAssignments: PrismMutation[] = [];
 
     for (const operation of operations) {
       switch (operation.kind) {
@@ -608,6 +707,7 @@ export class PrismStore implements AppStore {
             case "Instruction":
               surfaces.add("instructionRows");
               surfaces.add("instructionSelectorCatalog");
+              clearInstructionMatches = true;
               break;
             case "SavedSelector":
               surfaces.add("savedSelectorRows");
@@ -644,14 +744,16 @@ export class PrismStore implements AppStore {
           break;
         case "tag.set":
         case "tag.clear":
-          clearTagReads = true;
+          changedTagAssignments.push(operation);
           if (operation.tagId === "task.label") {
             addAll(surfaces, TASK_LABEL_DERIVED_SURFACES);
             clearMatcherResults = true;
           } else if (operation.tagId === "project.label_definition") {
+            clearTagReads = true;
             surfaces.add("taskLabelRows");
             clearMatcherResults = true;
           } else {
+            clearTagReads = true;
             clearMatcherResults = true;
           }
           break;
@@ -664,15 +766,36 @@ export class PrismStore implements AppStore {
 
     if (clearAllRows) this.rowCache.clear();
     else this.deleteRowCaches(surfaces);
+    if (clearMatcherResults) this.deleteMatcherRowCaches();
     if (clearMatcherResults) this.matcherResultCache.clear();
+    if (clearAllRows || clearInstructionMatches) this.instructionMatchCache.clear();
     if (clearTagReads) this.tagReadCache.clear();
+    else this.deleteTagReadCaches(changedTagAssignments);
   }
 
   private deleteRowCaches(surfaceIds: Set<string>): void {
     if (surfaceIds.size === 0) return;
     for (const key of this.rowCache.keys()) {
-      const surfaceId = key.slice("rows:".length).split(":", 1)[0];
+      const surfaceId = rowCacheSurfaceId(key);
       if (surfaceId && surfaceIds.has(surfaceId)) this.rowCache.delete(key);
+    }
+  }
+
+  private deleteMatcherRowCaches(): void {
+    for (const key of this.rowCache.keys()) {
+      if (key.startsWith("matcher:")) this.rowCache.delete(key);
+    }
+  }
+
+  private deleteTagReadCaches(operations: PrismMutation[]): void {
+    for (const operation of operations) {
+      if (operation.kind !== "tag.set" && operation.kind !== "tag.clear") continue;
+      this.tagReadCache.delete(`read:${operation.subjectRef}:`);
+      this.tagReadCache.delete(`read:${operation.subjectRef}:${operation.tagId}`);
+      this.tagReadCache.delete(`find:${operation.tagId}:`);
+      if (operation.valueKey !== undefined) {
+        this.tagReadCache.delete(`find:${operation.tagId}:${operation.valueKey}`);
+      }
     }
   }
 
@@ -686,15 +809,17 @@ export class PrismStore implements AppStore {
   }
 
   private async readMaterializedMatcherTaskIdsBySurfaceId(surfaceId: string, projectId: string): Promise<string[]> {
-    const rows = await this.options.client.readMaterializedSurface<{ task_id: string }>({
-      projectId: this.options.projectId,
-      shardId: this.options.shardId,
-      appId: "unblock",
-      surfaceId,
-      replacementScope: projectId,
-      limit: 10_000,
-      offset: 0,
-    });
+    const rows = await this.cachedRows(`matcher:${surfaceId}:${projectId}`, async () =>
+      await this.options.client.readMaterializedSurface<{ task_id: string }>({
+        projectId: this.options.projectId,
+        shardId: this.options.shardId,
+        appId: "unblock",
+        surfaceId,
+        replacementScope: projectId,
+        limit: 10_000,
+        offset: 0,
+      })
+    );
     return [...new Set(rows.map((row) => row.task_id))].sort();
   }
 
@@ -1054,6 +1179,10 @@ class PrismTaskRepository implements TaskRepository {
 
   async update(task: Task): Promise<void> {
     const previous = await this.get(task.projectId, task.id);
+    await this.updateWithPrevious(previous, task);
+  }
+
+  async updateWithPrevious(previous: Task | null, task: Task): Promise<void> {
     await this.store.record([
       objectMutation("object.update", "Task", task.id, taskFields(task)),
       ...parentLinkOperations(previous?.parentTaskId ?? null, task),
@@ -1080,6 +1209,57 @@ class PrismDependencyRepository implements DependencyRepository {
 
   async listDependents(projectId: string, dependsOnTaskId: string): Promise<Dependency[]> {
     return (await this.list(projectId)).filter((dependency) => dependency.dependsOnTaskId === dependsOnTaskId);
+  }
+
+  async inspectAdd(projectId: string, taskId: string, dependsOnTaskId: string): Promise<{
+    task: { id: string; archivedAt: string | null } | null;
+    dependsOnTask: { id: string; archivedAt: string | null } | null;
+    exists: boolean;
+    createsDependencyCycle: boolean;
+    taskContainsDependsOnTask: boolean;
+    dependsOnTaskContainsTask: boolean;
+  }> {
+    if (!this.store.canReadMaterializedRows()) {
+      const [tasks, dependencies] = await Promise.all([
+        this.store.tasks.list(projectId),
+        this.list(projectId),
+      ]);
+      const task = tasks.find((candidate) => candidate.id === taskId) ?? null;
+      const dependsOnTask = tasks.find((candidate) => candidate.id === dependsOnTaskId) ?? null;
+      return {
+        task: task ? { id: task.id, archivedAt: task.archivedAt } : null,
+        dependsOnTask: dependsOnTask ? { id: dependsOnTask.id, archivedAt: dependsOnTask.archivedAt } : null,
+        exists: dependencies.some((dependency) => dependency.taskId === taskId && dependency.dependsOnTaskId === dependsOnTaskId),
+        createsDependencyCycle: hasDependencyPath(dependencies, dependsOnTaskId, taskId),
+        taskContainsDependsOnTask: hasHierarchyPath(tasks, taskId, dependsOnTaskId),
+        dependsOnTaskContainsTask: hasHierarchyPath(tasks, dependsOnTaskId, taskId),
+      };
+    }
+
+    const [
+      taskRow,
+      dependsOnTaskRow,
+      existingDependency,
+      reverseDependencySummary,
+      taskDescendantSummary,
+      dependsOnTaskDescendantSummary,
+    ] = await Promise.all([
+      this.store.materializedRowByOutputKey<TaskRow>("taskRows", projectId, `${projectId}:${taskId}`),
+      this.store.materializedRowByOutputKey<TaskRow>("taskRows", projectId, `${projectId}:${dependsOnTaskId}`),
+      this.store.materializedRowByOutputKey<DependencyRow>("taskDependencyRows", projectId, `${projectId}:${taskId}:${dependsOnTaskId}`),
+      this.store.materializedRowByOutputKey<DependencySummaryRow>("taskDependencySummary", projectId, `${projectId}:${dependsOnTaskId}`),
+      this.store.materializedRowByOutputKey<DescendantSummaryRow>("descendantSummary", projectId, `${projectId}:${taskId}`),
+      this.store.materializedRowByOutputKey<DescendantSummaryRow>("descendantSummary", projectId, `${projectId}:${dependsOnTaskId}`),
+    ]);
+
+    return {
+      task: taskRow ? { id: taskRow.id, archivedAt: taskRow.archived_at } : null,
+      dependsOnTask: dependsOnTaskRow ? { id: dependsOnTaskRow.id, archivedAt: dependsOnTaskRow.archived_at } : null,
+      exists: existingDependency !== null,
+      createsDependencyCycle: reverseDependencySummary?.dependency_ids.includes(taskId) ?? false,
+      taskContainsDependsOnTask: taskDescendantSummary?.descendant_ids.includes(dependsOnTaskId) ?? false,
+      dependsOnTaskContainsTask: dependsOnTaskDescendantSummary?.descendant_ids.includes(taskId) ?? false,
+    };
   }
 
   async hasDependency(projectId: string, taskId: string, dependsOnTaskId: string): Promise<boolean> {
@@ -1444,6 +1624,10 @@ class PrismMatcherQueryRepository implements MatcherQueryRepository {
 
   async matchTaskIds(projectId: string, query: string, filters: Record<string, unknown> = {}): Promise<string[]> {
     return await this.store.matchTaskIds(projectId, query, filters);
+  }
+
+  async matchingInstructionIds(projectId: string, filters: Record<string, unknown> = {}): Promise<Array<{ instructionId: string; taskId: string }>> {
+    return await this.store.matchingInstructionIds(projectId, filters);
   }
 
   async matchTaskIdsByInstructionQuery(
@@ -2100,6 +2284,32 @@ function addAll(target: Set<string>, values: readonly string[]): void {
   for (const value of values) target.add(value);
 }
 
+function instructionTaskMatches(
+  instructions: Instruction[],
+  taskIdsByQuery: Map<string, string[]>,
+): Array<{ instructionId: string; taskId: string }> {
+  const matches: Array<{ instructionId: string; taskId: string }> = [];
+  for (const instruction of instructions) {
+    for (const taskId of taskIdsByQuery.get(instruction.query) ?? []) {
+      matches.push({ instructionId: instruction.id, taskId });
+    }
+  }
+  return matches.sort((a, b) => a.instructionId.localeCompare(b.instructionId) || a.taskId.localeCompare(b.taskId));
+}
+
+function rowCacheSurfaceId(key: string): string | null {
+  if (key.startsWith("rows:")) return key.slice("rows:".length).split(":", 1)[0] || null;
+  if (key.startsWith("output:")) return key.slice("output:".length).split(":", 1)[0] || null;
+  return null;
+}
+
+function materializedRowCacheTtlMs(): number {
+  const raw = process.env.UNBLOCK_PRISM_MATERIALIZED_ROW_CACHE_MS;
+  if (raw === undefined) return 50;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 50;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2330,6 +2540,8 @@ type InstructionSelectorCatalogRow = {
   selector_fragment_id: string | null;
   selector_fragment_hash: string | null;
   body: string;
+  enabled: boolean;
+  archived_at: string | null;
 };
 
 type SavedSelectorRow = {
