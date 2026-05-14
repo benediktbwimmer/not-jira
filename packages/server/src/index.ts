@@ -115,6 +115,30 @@ export function createApp(options: ServerOptions = {}) {
   app.post("/api/projects/:id/archive", async (c) => c.json(await (await globalMutationServices(c)).projects.archive(c.req.param("id"))));
   app.post("/api/projects/:id/restore", async (c) => c.json(await (await globalMutationServices(c)).projects.restore(c.req.param("id"))));
 
+  app.get("/api/admin/me", async (c) => {
+    const hosted = await requireHosted(c);
+    await authorizeHosted(c, null);
+    return c.json({
+      tenantId: hosted.identity.tenantId,
+      principalId: hosted.identity.principalId,
+      organizationId: hosted.identity.organizationId,
+      roles: hosted.identity.roles,
+      permissions: hosted.identity.permissions,
+      issuedBy: hosted.identity.issuedBy
+    });
+  });
+
+  app.get("/api/audit", async (c) => {
+    const hosted = await requireHosted(c);
+    const projectId = c.req.query("projectId")?.trim() || null;
+    await authorizeHosted(c, projectId);
+    return c.json(await c.get("store").hostedAudit?.list({
+      tenantId: hosted.identity.tenantId,
+      projectId: c.req.query("projectId") === undefined ? undefined : projectId,
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }) ?? []);
+  });
+
   app.get("/api/tasks", async (c) => {
     const services = await scopedServices(c);
     const query = c.req.query();
@@ -324,6 +348,14 @@ async function authorizeHosted(c: Context, projectId: string | null): Promise<vo
     }
   }
   await enforceHostedRequest(store, effective, c.req.method, c.req.path, projectId, c.req.raw);
+}
+
+async function requireHosted(c: Context): Promise<HostedRequestContext> {
+  const hosted = c.get("hosted");
+  if (!hosted) {
+    throw new UnblockError("validation", "This endpoint is only available in hosted mode.");
+  }
+  return hosted;
 }
 
 async function requireConfigIdentity(c: Context): Promise<{ machine: string; actor: string }> {

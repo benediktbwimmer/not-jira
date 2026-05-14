@@ -44,6 +44,33 @@ describe("hosted authorization", () => {
     expect(write.status).toBe(201);
     await expect(write.json()).resolves.toMatchObject({ id: "ALLOWED" });
   });
+
+  it("exposes hosted admin identity and exportable audit events", async () => {
+    const store = await seededStore();
+    const auditEvents: unknown[] = [];
+    store.hostedAudit = {
+      async append(event) {
+        auditEvents.push(event);
+      },
+      async list() {
+        return auditEvents as never[];
+      }
+    };
+    const app = createApp({ backend: "hosted", storeFactory: () => store, hostedAuth });
+
+    const me = await app.request("/api/admin/me", { headers: hostedHeaders("admin") });
+    expect(me.status).toBe(200);
+    await expect(me.json()).resolves.toMatchObject({
+      tenantId: "ORG_HOSTED",
+      principalId: "user_123",
+      roles: ["admin"]
+    });
+
+    const audit = await app.request("/api/audit", { headers: hostedHeaders("security_admin") });
+    expect(audit.status).toBe(200);
+    const body = await audit.json() as unknown[];
+    expect(body.some((event: any) => event.eventType === "hosted.request.allowed")).toBe(true);
+  });
 });
 
 async function seededStore(): Promise<AppStore> {

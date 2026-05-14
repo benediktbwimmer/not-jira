@@ -130,6 +130,7 @@ export function requireHostedPermission(identity: HostedIdentity, permission: Ho
 
 export function hostedPermissionForRequest(method: string, path: string): HostedPermission {
   if (path.startsWith("/api/audit")) return "tenant:audit:read";
+  if (path.startsWith("/api/admin") || path.startsWith("/api/hosted/metrics")) return "operator:read";
   if (path.startsWith("/api/secrets")) return "tenant:secrets:manage";
   if (path.startsWith("/api/connectors")) return "connector:admin";
   if (path === "/api/projects" && method !== "GET") return "project:admin";
