@@ -369,6 +369,132 @@ Later implementation tasks should decide:
 - How audit retention and export are physically partitioned.
 - Whether matcher planning caches are needed after the first benchmark pass.
 
+## Prism Flows Orchestration Boundary
+
+Prism Flows is the hosted connector orchestration layer. It should not own core
+Unblock state, task read models, matcher evaluation, or ordinary API request
+latency. The boundary is intentionally narrow: Unblock commits domain state to
+Postgres, then durable Flow runs perform external sync and reconciliation.
+
+### Unblock Postgres Owns
+
+Unblock remains the system of record for:
+
+- Tenants, projects, users, roles, and project membership.
+- Tasks, hierarchy, dependencies, tags, comments, instructions, views, feeds,
+  tracks, assignments, activity, and hosted audit.
+- Matcher parsing semantics and Postgres matcher lowering.
+- Connector configuration metadata, external object mappings, sync cursors,
+  sync run summaries, dead letters, outbox, and inbox records.
+- User-facing API responses and dashboard/frontend polling reads.
+- Idempotent application of inbound connector mutations.
+- The final decision about whether an external event changes local state.
+
+This means a hosted API request that creates or edits a task should complete
+after the Postgres transaction commits. It should not wait for a Flow run unless
+the API explicitly exposes a synchronous connector operation later.
+
+### Prism Flows Owns
+
+Prism Flows owns durable external work:
+
+- Receiving and validating connector webhooks where the connector endpoint is
+  routed through the Flow layer.
+- Polling external systems with durable cursors and dedupe windows.
+- Reading Unblock outbox events and executing outbound connector operations.
+- Calling GitHub APIs and later other issue/project-management APIs.
+- Respecting external rate limits and retry policies.
+- Running backfills and periodic reconciliation.
+- Recovering ambiguous external mutations through retry-safe or manual-review
+  policies.
+- Emitting inbound events into the Unblock inbox.
+- Producing Flow run references and summaries for hosted observability.
+
+Flows can use Deno jobs or HTTP steps to call Unblock internal APIs, but those
+calls must go through typed, idempotent contracts. Flow code should not reach
+around the Unblock API and mutate arbitrary core tables directly.
+
+### Event Flow
+
+Outbound sync:
+
+1. A user or API client changes Unblock state.
+2. The domain transaction writes the task/tag/dependency change, activity/audit
+   records, and an `outbox_events` record.
+3. A hosted publisher starts or signals the relevant Prism Flow with the outbox
+   event ID and idempotency key.
+4. The Flow loads the event through an internal Unblock API, performs external
+   work, and records connector evidence.
+5. The Flow reports completion or failure back to Unblock, updating sync run
+   state and any relevant mapping metadata.
+
+Inbound sync:
+
+1. GitHub sends a webhook, or a Flow poller/backfill discovers a changed issue.
+2. The Flow validates/dedupes the external event and normalizes it.
+3. The Flow posts the normalized event to an Unblock inbox endpoint with a
+   stable external event ID.
+4. Unblock inserts or finds the `inbox_events` record.
+5. Unblock applies the local mutation in a transaction, updates mappings and
+   audit/activity, then marks the inbox event applied.
+6. If the event is ambiguous, Unblock records a dead letter or operator-review
+   item instead of guessing.
+
+Reconciliation:
+
+1. A scheduled Flow chooses a connection/project scope.
+2. The Flow fetches a bounded page or batch from the external system.
+3. The Flow compares external identifiers and versions against Unblock mapping
+   APIs.
+4. Missing or divergent records become inbound inbox events, outbound repair
+   events, or dead letters.
+5. Cursor advancement happens only after event evidence is durably recorded.
+
+### Idempotency And Ownership Rules
+
+- Every outbox event has a stable idempotency key derived from the local object,
+  operation, and local version.
+- Every inbound external event has a stable source event key, such as GitHub
+  delivery ID plus issue event identity.
+- Unblock inbox application is exactly-once by unique source event key.
+- Flow retries may repeat calls, but repeated calls must converge on the same
+  Unblock inbox/outbox result.
+- External object mappings are updated by Unblock transactions, not by Flow
+  state alone.
+- Flow run state is evidence and orchestration history. It is not the primary
+  task state or connector mapping state.
+
+### What Does Not Belong In Flows
+
+The following must stay out of Prism Flows for the hosted Unblock architecture:
+
+- Task CRUD as the primary data path.
+- Matcher query execution for ordinary UI reads.
+- Dependency graph materialization for the product UI.
+- Project/tenant authorization decisions.
+- Long-lived local caches that become required for correctness.
+- Direct writes to core task/dependency/tag/instruction tables.
+- User-visible source-of-truth state that cannot be reconstructed from Unblock
+  Postgres.
+
+### First Connector Boundary
+
+GitHub Issues is the first connector target.
+
+The first production slice should support:
+
+- GitHub installation/connection configuration in hosted Unblock.
+- Issue webhook ingestion.
+- Backfill/poll reconciliation for missed webhooks.
+- Mapping between GitHub repositories/issues and Unblock tasks.
+- Inbound issue create/update/close/reopen to Unblock task mutations.
+- Outbound selected Unblock task changes to GitHub issue mutations.
+- Rate-limit handling, retry, dead-letter, and operator visibility.
+
+It should not try to support every GitHub Project, pull request, label, or
+milestone behavior in the first connector milestone. Those should become later
+connector tasks after the issue sync path is proven.
+
 ## Current SQLite Contract
 
 The existing SQLite path is the compatibility contract for local Unblock. Any
