@@ -1652,8 +1652,9 @@ export class QueryService {
 
   async list(filters: TaskListFilters = {}): Promise<TaskView[]> {
     const where = filters.where?.trim();
-    const nativeTaskIds = where && this.store.matcher
-      ? new Set(await this.store.matcher.matchTaskIds(this.projectId, where, (({ where: _where, ...baseFilters }) => baseFilters)(filters)))
+    const nativeMatcher = this.nativeMatcher();
+    const nativeTaskIds = where && nativeMatcher
+      ? new Set(await nativeMatcher.matchTaskIds(this.projectId, where, (({ where: _where, ...baseFilters }) => baseFilters)(filters)))
       : null;
     const [allTasks, dependencies, comments, tags, taskTags, tracks, assignments] = await Promise.all([
       this.store.tasks.list(this.projectId),
@@ -1823,8 +1824,9 @@ export class QueryService {
 
   async matchIds(query: string, limit: number, filters: Omit<TaskListFilters, "where"> = {}): Promise<string[]> {
     const normalizedLimit = normalizeQueryLimit(limit);
-    if (this.store.matcher) {
-      return (await this.store.matcher.matchTaskIds(this.projectId, query, filters)).slice(0, normalizedLimit);
+    const nativeMatcher = this.nativeMatcher();
+    if (nativeMatcher) {
+      return (await nativeMatcher.matchTaskIds(this.projectId, query, filters)).slice(0, normalizedLimit);
     }
     return (await this.match(query, normalizedLimit, filters)).map((task) => task.id);
   }
@@ -1874,10 +1876,11 @@ export class QueryService {
     if (errors.length > 0) {
       return { ok: false, query, errors, matches: [] };
     }
-    if (this.store.matcher) {
+    const nativeMatcher = this.nativeMatcher();
+    if (nativeMatcher) {
       const tasks = await this.list({ includeArchived: true, includeFinished: true });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
-      const taskIds = await this.store.matcher.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true });
+      const taskIds = await nativeMatcher.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true });
       return {
         ok: true,
         query,
@@ -1898,7 +1901,7 @@ export class QueryService {
               archivedAt: null
             },
             task,
-            reasons: ["matched by Prism selector fragment"]
+            reasons: ["matched by native store matcher"]
           }))
       };
     }
@@ -1932,7 +1935,8 @@ export class QueryService {
     const instructions = await this.store.instructions.list(this.projectId);
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
     const matches: InstructionMatch[] = [];
-    if (this.store.matcher) {
+    const nativeMatcher = this.nativeMatcher();
+    if (nativeMatcher) {
       const tasks = await this.list({ includeArchived: true, includeFinished: true });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
       const taskIdsByQuery = await this.matchTaskIdsByInstructionQuery(enabled);
@@ -1940,7 +1944,7 @@ export class QueryService {
         for (const taskId of taskIdsByQuery.get(instruction.query) ?? []) {
           const task = taskById.get(taskId);
           if (task) {
-            matches.push({ instruction, task, reasons: ["matched by Prism selector fragment"] });
+            matches.push({ instruction, task, reasons: ["matched by native store matcher"] });
           }
         }
       }
@@ -1959,15 +1963,16 @@ export class QueryService {
   }
 
   async matchingInstructionIds(): Promise<Array<{ instructionId: string; taskId: string }>> {
-    if (this.store.matcher?.matchingInstructionIds) {
-      return await this.store.matcher.matchingInstructionIds(this.projectId, {
+    const nativeMatcher = this.nativeMatcher();
+    if (nativeMatcher?.matchingInstructionIds) {
+      return await nativeMatcher.matchingInstructionIds(this.projectId, {
         includeArchived: true,
         includeFinished: true,
       });
     }
     const instructions = await this.store.instructions.list(this.projectId);
     const enabled = instructions.filter((instruction) => instruction.enabled && !instruction.archivedAt);
-    if (this.store.matcher) {
+    if (nativeMatcher) {
       const matches: Array<{ instructionId: string; taskId: string }> = [];
       const taskIdsByQuery = await this.matchTaskIdsByInstructionQuery(enabled);
       for (const instruction of enabled) {
@@ -1984,9 +1989,10 @@ export class QueryService {
   }
 
   private async matchTaskIdsByInstructionQuery(instructions: Instruction[]): Promise<Map<string, string[]>> {
-    if (!this.store.matcher) return new Map();
-    if (this.store.matcher.matchTaskIdsByInstructionQuery) {
-      return await this.store.matcher.matchTaskIdsByInstructionQuery(this.projectId, instructions, {
+    const nativeMatcher = this.nativeMatcher();
+    if (!nativeMatcher) return new Map();
+    if (nativeMatcher.matchTaskIdsByInstructionQuery) {
+      return await nativeMatcher.matchTaskIdsByInstructionQuery(this.projectId, instructions, {
         includeArchived: true,
         includeFinished: true,
       });
@@ -1994,9 +2000,13 @@ export class QueryService {
     const queries = [...new Set(instructions.map((instruction) => instruction.query))];
     const entries = await Promise.all(queries.map(async (query) => [
       query,
-      await this.store.matcher!.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true })
+      await nativeMatcher.matchTaskIds(this.projectId, query, { includeArchived: true, includeFinished: true })
     ] as const));
     return new Map(entries);
+  }
+
+  private nativeMatcher() {
+    return this.store.capabilities?.matcherQuery === "store" ? this.store.matcher : undefined;
   }
 
   async sourceCoverage(): Promise<SourceSectionCoverage[]> {

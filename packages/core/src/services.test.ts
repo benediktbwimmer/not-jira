@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createMemoryStore, createServices, ensureUnblockConfig, UnblockError, readUnblockConfig } from "./index.js";
+import type { AppStore } from "./store.js";
 
 describe("unblock core services", () => {
   it("creates and validates the user config file with safe defaults", async () => {
@@ -425,6 +426,24 @@ describe("unblock core services", () => {
     const markdown = await services.exports.markdown({ where: "tag = backend", limit: 10 });
     expect(markdown).toContain("### `API` API work");
     expect(markdown).not.toContain("### `WEB` Web work");
+  });
+
+  it("keeps service-backed stores on the in-process matcher path", async () => {
+    const store = createMemoryStore() as AppStore;
+    store.matcher = {
+      async matchTaskIds() {
+        throw new Error("service matcher should not call native matcher");
+      }
+    };
+    const services = createServices(store, { machine: "test-machine", actor: "test-actor" });
+
+    await services.tasks.add({ id: "API", title: "API work" });
+    await services.tags.add({ id: "BACKEND", name: "backend" });
+    await services.tags.assign("API", ["BACKEND"]);
+
+    expect(store.capabilities?.matcherQuery).toBe("service");
+    expect((await services.query.match("tag = backend", 10)).map((task) => task.id)).toEqual(["API"]);
+    expect(await services.query.matchIds("tag = backend", 10)).toEqual(["API"]);
   });
 
   it("uses the matcher language to filter activity by attached task", async () => {
