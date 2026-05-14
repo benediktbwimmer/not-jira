@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { validation } from "./errors.js";
 import { sqliteMigrations } from "./migrations.js";
 import type {
   ActivityRepository,
@@ -315,6 +316,33 @@ class SqliteTaskRepository implements TaskRepository {
         version = @version
       where project_id = @projectId and id = @id
     `).run(task);
+  }
+
+  async updateWithPrevious(previous: Task, task: Task): Promise<void> {
+    const result = this.db.prepare(`
+      update tasks set
+        parent_task_id = @parentTaskId,
+        title = @title,
+        description = @description,
+        lifecycle = @lifecycle,
+        priority = @priority,
+        size = @size,
+        source_doc = @sourceDoc,
+        source_section = @sourceSection,
+        source_anchor = @sourceAnchor,
+        source_line = @sourceLine,
+        source_text = @sourceText,
+        completion_bar = @completionBar,
+        updated_at = @updatedAt,
+        started_at = @startedAt,
+        finished_at = @finishedAt,
+        archived_at = @archivedAt,
+        version = @version
+      where project_id = @projectId and id = @id and version = @previousVersion
+    `).run({ ...task, previousVersion: previous.version });
+    if (result.changes !== 1) {
+      validation("Task version conflict.", { taskId: task.id, expectedVersion: previous.version });
+    }
   }
 
   async delete(projectId: string, id: string): Promise<void> {

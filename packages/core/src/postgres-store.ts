@@ -245,6 +245,15 @@ class PostgresDependencyRepository implements DependencyRepository {
   }
 
   async inspectAdd(projectId: string, taskId: string, dependsOnTaskId: string) {
+    if (isPoolClient(this.db)) {
+      const task = await this.taskSummary(projectId, taskId);
+      const dependsOnTask = await this.taskSummary(projectId, dependsOnTaskId);
+      const exists = await this.hasDependency(projectId, taskId, dependsOnTaskId);
+      const createsDependencyCycle = await this.hasDependencyPath(projectId, dependsOnTaskId, taskId);
+      const taskContainsDependsOnTask = await this.hasHierarchyPath(projectId, taskId, dependsOnTaskId);
+      const dependsOnTaskContainsTask = await this.hasHierarchyPath(projectId, dependsOnTaskId, taskId);
+      return { task, dependsOnTask, exists, createsDependencyCycle, taskContainsDependsOnTask, dependsOnTaskContainsTask };
+    }
     const [task, dependsOnTask, exists, createsDependencyCycle, taskContainsDependsOnTask, dependsOnTaskContainsTask] = await Promise.all([
       this.taskSummary(projectId, taskId),
       this.taskSummary(projectId, dependsOnTaskId),
