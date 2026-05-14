@@ -495,6 +495,169 @@ It should not try to support every GitHub Project, pull request, label, or
 milestone behavior in the first connector milestone. Those should become later
 connector tasks after the issue sync path is proven.
 
+## Benchmark And Production Readiness Gates
+
+Hosted Unblock should not be accepted as production-ready until it passes
+repeatable benchmark gates. The gates should be run against release builds, a
+real Postgres database, and seeded data sets that resemble actual agent-heavy
+project usage.
+
+The exact machine profile can be adjusted in the benchmark task, but every
+reported number must include:
+
+- commit SHA and build mode
+- CPU, memory, and database location
+- Postgres version and connection pool settings
+- data set size and project/tenant distribution
+- concurrency level
+- p50, p95, p99, max latency, throughput, and error rate
+- database CPU, connection saturation, slow queries, and lock waits where
+  available
+
+### Data Sets
+
+Benchmarks should run at these scales:
+
+| Name | Tenants | Projects per tenant | Tasks per project | Dependency edges per project | Tags per project | Instructions per project |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small | 1 | 1 | 1,000 | 2,000 | 50 | 25 |
+| Medium | 8 | 8 | 10,000 | 30,000 | 200 | 100 |
+| Large | 32 | 16 | 50,000 | 200,000 | 500 | 250 |
+
+The medium data set is the default CI performance gate. The large data set is
+the release gate and can run outside ordinary pull request CI if needed.
+
+### CRUD Gates
+
+CRUD benchmarks measure the native Unblock API and repository layer, not direct
+SQL helper scripts.
+
+Release gates for hosted Postgres:
+
+- Task create with activity and optional outbox: at least 1,000 writes/second
+  sustained on the medium data set, p95 below 75 ms, error rate below 0.1%.
+- Task update/lifecycle transition with activity and version check: at least
+  1,500 writes/second sustained, p95 below 60 ms.
+- Dependency add/remove with cycle and hierarchy checks: at least 500
+  mutations/second sustained on the medium data set, p95 below 100 ms.
+- Tag assignment: at least 2,000 assignments/second sustained, p95 below 50 ms.
+- Comment add/edit/archive: at least 1,000 mutations/second sustained, p95
+  below 75 ms.
+- Import-tree style bulk creation: at least 10,000 tasks/minute with tags,
+  dependencies, and assignments on one project.
+
+SQLite local mode should have a separate non-hosted baseline. It does not need
+to hit hosted throughput, but regressions against the current local path should
+fail tests.
+
+### Matcher And Heavy Read Gates
+
+Matcher and read benchmarks must include warm and cold-ish runs. They should not
+depend on Prism materialization or connector workers.
+
+Required hosted gates on the medium data set:
+
+- Basic task list by lifecycle/tag/assignee: p95 below 50 ms.
+- Ready queue for one actor: p95 below 50 ms.
+- Saved queue feed: p95 below 75 ms.
+- Task detail with dependencies, dependents, comments, tags, and instructions:
+  p95 below 75 ms.
+- Matcher with nested boolean field predicates: p95 below 75 ms.
+- Matcher with `depends on` or `unblocks` depth-bounded graph predicates: p95
+  below 125 ms.
+- Matcher with transitive graph count predicates: p95 below 200 ms.
+- Instruction matching for one task: p95 below 100 ms.
+- Project activity feed: p95 below 50 ms.
+
+The large data set release gate may allow higher graph-query latency, but p95
+for ordinary dashboard and queue reads should stay below 150 ms.
+
+### Frontend Polling Gates
+
+The hosted product must tolerate many open frontends polling at once because the
+current UI model refreshes views periodically.
+
+Required scenarios:
+
+- 100 concurrent frontends polling dashboard, ready queue, selected task detail,
+  activity, and instructions every 5 seconds for 10 minutes.
+- 500 concurrent frontends polling the same mix every 5 seconds for 10 minutes.
+- Mixed active workload where 10% of clients also perform task updates,
+  comments, and dependency edits while polling continues.
+
+Release gates:
+
+- 100-client scenario: p95 read latency below 75 ms and no sustained database
+  pool saturation.
+- 500-client scenario: p95 read latency below 150 ms, p99 below 400 ms, error
+  rate below 0.1%.
+- Mixed workload: write p95 below 150 ms and read p95 below 200 ms.
+- Polling must not starve connector inbox/outbox processing.
+
+If these gates require push-based UI updates later, that should be a product
+decision made from benchmark evidence, not an assumption baked into the first
+Postgres port.
+
+### Connector Sync Gates
+
+Connector benchmarks apply to hosted mode only. They measure both Prism Flows
+orchestration and Unblock inbox/outbox application, but the final user-visible
+state is verified in Unblock Postgres.
+
+GitHub Issues release gates:
+
+- Webhook burst: ingest and dedupe 10,000 issue events with no duplicate local
+  application and p95 inbox application below 150 ms.
+- Outbound sync: process 10,000 task-change outbox events with no lost events,
+  respecting simulated GitHub rate limits.
+- Reconciliation: scan 100,000 external issues across multiple repositories
+  and converge mappings without duplicate tasks.
+- Retry safety: repeated Flow deliveries must not create duplicate task changes,
+  comments, mappings, or audit records.
+- Dead-letter path: ambiguous or invalid events become operator-visible dead
+  letters within 30 seconds.
+
+Connector throughput is allowed to be rate-limited by external APIs. The gate is
+therefore convergence, correctness, observability, and backpressure behavior,
+not only raw events per second.
+
+### Multi-Tenant Gates
+
+Hosted Unblock must preserve tenant isolation while scaling across tenants and
+projects.
+
+Required scenarios:
+
+- One hot project with many tasks and many pollers.
+- Many warm projects across one tenant.
+- Many tenants with independent projects and connector configurations.
+- One tenant with a connector backlog while other tenants continue normal CRUD
+  and reads.
+
+Release gates:
+
+- No cross-tenant reads or writes in correctness tests.
+- A hot tenant should not push unrelated tenants above 2x their baseline p95
+  latency.
+- Per-tenant rate limiting should protect global database and Flow capacity.
+- Benchmark reports must break down latency by tenant/project, not only global
+  averages.
+
+### Readiness Checklist
+
+The hosted path is not production-ready until all of the following are true:
+
+- SQLite compatibility tests still pass.
+- Postgres parity tests pass for every core service path.
+- Benchmark gates above pass on release builds.
+- Query plans for critical matcher/read paths are captured and reviewed.
+- Migration, backup, and restore runbooks are tested.
+- WorkOS tenant/project authorization has negative tests.
+- Audit and activity records exist for every hosted security-relevant mutation.
+- GitHub connector replay, retry, and reconciliation tests pass.
+- Failure injection covers database downtime, Flow downtime, GitHub errors,
+  webhook replay, and retry exhaustion.
+
 ## Current SQLite Contract
 
 The existing SQLite path is the compatibility contract for local Unblock. Any
