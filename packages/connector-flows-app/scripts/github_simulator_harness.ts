@@ -42,6 +42,11 @@ export interface HarnessResult {
     elapsedMs: number;
     throughputPerSecond: number;
     taskCount: number;
+    taskCreatedSpanMs?: number | null;
+    inboxEventCount?: number;
+    inboxEventsWithMapping?: number;
+    connectorMappingCount?: number;
+    hostedAuditCount?: number;
     webhookDeliveries?: {
       total: number;
       ok: number;
@@ -306,6 +311,7 @@ export async function runGithubSimulatorHarness(
     const smokeEnv: Env = {
       UNBLOCK_HOSTED_API_URL: unblockUrl,
       UNBLOCK_HOSTED_AUTH_MODE: "trusted-headers",
+      UNBLOCK_E2E_POSTGRES_URL: postgresUrlForUnblock(env)!,
       UNBLOCK_TRUSTED_PRINCIPAL_ID: "codex-e",
       UNBLOCK_TRUSTED_ORGANIZATION_ID: options.tenantId,
       UNBLOCK_TRUSTED_ROLES: "owner",
@@ -407,12 +413,16 @@ async function runReconcileBenchmark(input: {
     "unblock.tasks.wait",
     () => waitForTaskCount(input.env, input.issueCount, input.timeoutMs),
   );
+  const diagnostics = await collectBenchmarkDiagnostics(input.env).catch(() =>
+    undefined
+  );
   const elapsedMs = Math.round(performance.now() - started);
   return {
     issueCount: input.issueCount,
     elapsedMs,
     throughputPerSecond: perSecond(taskCount, elapsedMs),
     taskCount,
+    ...diagnostics,
   };
 }
 
@@ -501,12 +511,16 @@ async function runWebhookBenchmark(input: {
     "unblock.tasks.wait",
     () => waitForTaskCount(input.env, input.issueCount, input.timeoutMs),
   );
+  const diagnostics = await collectBenchmarkDiagnostics(input.env).catch(() =>
+    undefined
+  );
   const elapsedMs = Math.round(performance.now() - started);
   return {
     issueCount: input.issueCount,
     elapsedMs,
     throughputPerSecond: perSecond(taskCount, elapsedMs),
     taskCount,
+    ...diagnostics,
     webhookDeliveries,
   };
 }
@@ -625,6 +639,42 @@ async function startReconcileFlow(
 }
 
 async function waitForTaskCount(env: Env, expected: number, timeoutMs: number) {
+  const postgresUrl = postgresUrlForUnblock(env);
+  if (postgresUrl) {
+    return await waitForTaskCountPostgres(env, postgresUrl, expected, timeoutMs)
+      .catch(() => waitForTaskCountHttp(env, expected, timeoutMs));
+  }
+  return await waitForTaskCountHttp(env, expected, timeoutMs);
+}
+
+async function waitForTaskCountPostgres(
+  env: Env,
+  postgresUrl: string,
+  expected: number,
+  timeoutMs: number,
+) {
+  const projectId = required(env, "UNBLOCK_PROJECT_ID");
+  const deadline = Date.now() + timeoutMs;
+  let lastCount = 0;
+  const projectLiteral = sqlLiteral(projectId);
+  while (Date.now() <= deadline) {
+    lastCount = await psqlInt(
+      postgresUrl,
+      `select count(*)::int from tasks where project_id = ${projectLiteral} and id like 'GH-%'`,
+    );
+    if (lastCount >= expected) return lastCount;
+    await delay(50);
+  }
+  throw new Error(
+    `Timed out waiting for ${expected} GitHub tasks; observed ${lastCount}.`,
+  );
+}
+
+async function waitForTaskCountHttp(
+  env: Env,
+  expected: number,
+  timeoutMs: number,
+) {
   const baseUrl = required(env, "UNBLOCK_HOSTED_API_URL");
   const projectId = required(env, "UNBLOCK_PROJECT_ID");
   const tenantId = required(env, "UNBLOCK_TENANT_ID");
@@ -643,11 +693,89 @@ async function waitForTaskCount(env: Env, expected: number, timeoutMs: number) {
       ? tasks.filter((task) => String(task.id ?? "").startsWith("GH-")).length
       : 0;
     if (lastCount >= expected) return lastCount;
-    await delay(500);
+    await delay(250);
   }
   throw new Error(
     `Timed out waiting for ${expected} GitHub tasks; observed ${lastCount}.`,
   );
+}
+
+async function collectBenchmarkDiagnostics(env: Env) {
+  const postgresUrl = postgresUrlForUnblock(env);
+  if (!postgresUrl) return undefined;
+  const projectId = required(env, "UNBLOCK_PROJECT_ID");
+  const projectLiteral = sqlLiteral(projectId);
+  const rows = await psqlRows(
+    postgresUrl,
+    `
+      select 'task_count', count(*)::text from tasks where project_id = ${projectLiteral} and id like 'GH-%'
+      union all
+      select 'task_span_ms', coalesce(round(extract(epoch from max(created_at)-min(created_at))*1000)::bigint, 0)::text from tasks where project_id = ${projectLiteral} and id like 'GH-%'
+      union all
+      select 'inbox_event_count', count(*)::text from inbox_events where project_id = ${projectLiteral}
+      union all
+      select 'inbox_events_with_mapping', (count(*) filter (where payload_json ? 'mapping'))::text from inbox_events where project_id = ${projectLiteral}
+      union all
+      select 'connector_mapping_count', count(*)::text from connector_external_mappings where project_id = ${projectLiteral}
+      union all
+      select 'hosted_audit_count', count(*)::text from hosted_audit_events where project_id = ${projectLiteral}
+    `,
+  );
+  const values = new Map(rows.map((row) => {
+    const [key, value] = row.split("|", 2);
+    return [key, Number(value)];
+  }));
+  return {
+    taskCreatedSpanMs: values.get("task_span_ms") ?? null,
+    inboxEventCount: values.get("inbox_event_count") ?? 0,
+    inboxEventsWithMapping: values.get("inbox_events_with_mapping") ?? 0,
+    connectorMappingCount: values.get("connector_mapping_count") ?? 0,
+    hostedAuditCount: values.get("hosted_audit_count") ?? 0,
+  };
+}
+
+async function psqlInt(
+  postgresUrl: string,
+  sql: string,
+): Promise<number> {
+  const rows = await psqlRows(postgresUrl, sql);
+  const value = Number(rows[0]?.trim() ?? "NaN");
+  if (!Number.isFinite(value)) {
+    throw new Error(`psql did not return a numeric value: ${rows.join("\n")}`);
+  }
+  return value;
+}
+
+async function psqlRows(
+  postgresUrl: string,
+  sql: string,
+): Promise<string[]> {
+  const command = new Deno.Command("psql", {
+    args: [
+      "-X",
+      "-q",
+      "-A",
+      "-t",
+      postgresUrl,
+      "-c",
+      sql,
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const output = await command.output();
+  if (!output.success) {
+    throw new Error(new TextDecoder().decode(output.stderr).trim());
+  }
+  return new TextDecoder()
+    .decode(output.stdout)
+    .split("\n")
+    .map((row) => row.trim())
+    .filter(Boolean);
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 async function timed<T>(

@@ -324,6 +324,15 @@ describe("hosted authorization", () => {
   it("applies hosted connector inbox events and records observability", async () => {
     const store = await seededStore();
     installConnectorState(store);
+    const auditEvents: unknown[] = [];
+    store.hostedAudit = {
+      async append(event) {
+        auditEvents.push(event);
+      },
+      async list() {
+        return auditEvents as never[];
+      }
+    };
     const app = createApp({ backend: "hosted", storeFactory: () => store, hostedAuth });
     const event = connectorEvent({
       kind: "connector.inbound.task_upserted",
@@ -341,6 +350,7 @@ describe("hosted authorization", () => {
 
     expect(applied.status).toBe(200);
     await expect(applied.json()).resolves.toMatchObject({ applied: true, duplicate: false });
+    expect(auditEvents).toHaveLength(0);
     await expect(store.tasks.get("HOSTED", "GH-42")).resolves.toMatchObject({
       title: "Imported GitHub issue",
       sourceDoc: "https://github.com/acme/repo/issues/42"

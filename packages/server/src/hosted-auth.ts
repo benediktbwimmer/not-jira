@@ -22,6 +22,7 @@ export interface HostedRuntimeConfig {
   workosJwksUrl: string;
   rateLimitWindowMs: number;
   rateLimitMax: number;
+  identitySyncTtlMs?: number | undefined;
 }
 
 export interface HostedConfigStatus {
@@ -41,6 +42,7 @@ export interface HostedRequestContext {
 
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 const rateLimitBuckets = new Map<string, { resetAt: number; count: number }>();
+const identitySyncCache = new Map<string, { fingerprint: string; expiresAt: number; inFlight?: Promise<void> }>();
 
 export function hostedRuntimeConfig(env: NodeJS.ProcessEnv = process.env): HostedRuntimeConfig {
   const clientId = env.WORKOS_CLIENT_ID?.trim() ?? "";
@@ -52,7 +54,8 @@ export function hostedRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Hoste
     workosIssuer: issuer || ["https://api.workos.com", "https://api.workos.com/"],
     workosJwksUrl: env.WORKOS_JWKS_URL?.trim() || (clientId ? `https://api.workos.com/sso/jwks/${clientId}` : ""),
     rateLimitWindowMs: parsePositiveInteger(env.UNBLOCK_RATE_LIMIT_WINDOW_MS, 60_000),
-    rateLimitMax: parsePositiveInteger(env.UNBLOCK_RATE_LIMIT_MAX, 600)
+    rateLimitMax: parsePositiveInteger(env.UNBLOCK_RATE_LIMIT_MAX, 600),
+    identitySyncTtlMs: parseNonNegativeInteger(env.UNBLOCK_HOSTED_IDENTITY_SYNC_TTL_MS, 30_000)
   };
 }
 
@@ -116,8 +119,33 @@ export async function resolveHostedIdentity(headers: Headers, config: HostedRunt
   return identityFromWorkosClaims(verified.payload as JWTPayload);
 }
 
-export async function syncHostedIdentity(store: AppStore, identity: HostedIdentity): Promise<void> {
-  await store.hostedIdentity?.sync(identity);
+export async function syncHostedIdentity(store: AppStore, identity: HostedIdentity, ttlMs = 0): Promise<void> {
+  const repository = store.hostedIdentity;
+  if (!repository) return;
+  if (ttlMs <= 0) {
+    await repository.sync(identity);
+    return;
+  }
+
+  const now = Date.now();
+  const key = `${identity.tenantId}:${identity.principalId}`;
+  const fingerprint = hostedIdentityFingerprint(identity);
+  const existing = identitySyncCache.get(key);
+  if (existing?.fingerprint === fingerprint) {
+    if (existing.expiresAt > now) return;
+    if (existing.inFlight) return await existing.inFlight;
+  }
+
+  const inFlight = repository.sync(identity)
+    .then(() => {
+      identitySyncCache.set(key, { fingerprint, expiresAt: Date.now() + ttlMs });
+    })
+    .catch((error) => {
+      identitySyncCache.delete(key);
+      throw error;
+    });
+  identitySyncCache.set(key, { fingerprint, expiresAt: 0, inFlight });
+  await inFlight;
 }
 
 export async function enforceHostedRequest(
@@ -131,15 +159,17 @@ export async function enforceHostedRequest(
   const permission = hostedPermissionForRequest(method, path);
   try {
     requireHostedPermission(context.identity, permission);
-    await appendHostedAudit(store, context, {
-      projectId,
-      eventType: "hosted.request.allowed",
-      subjectType: permissionSubject(permission),
-      subjectId: projectId,
-      message: `Allowed ${method} ${path}`,
-      data: { method, path, permission },
-      request
-    });
+    if (shouldAuditAllowedHostedRequest(method, path)) {
+      await appendHostedAudit(store, context, {
+        projectId,
+        eventType: "hosted.request.allowed",
+        subjectType: permissionSubject(permission),
+        subjectId: projectId,
+        message: `Allowed ${method} ${path}`,
+        data: { method, path, permission },
+        request
+      });
+    }
   } catch (error) {
     await appendHostedAudit(store, context, {
       projectId,
@@ -230,6 +260,20 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseNonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function hostedIdentityFingerprint(identity: HostedIdentity): string {
+  return JSON.stringify({
+    organizationId: identity.organizationId,
+    roles: [...identity.roles].sort(),
+    permissions: [...identity.permissions].sort(),
+    issuedBy: identity.issuedBy
+  });
+}
+
 function secretKeyLooksValid(value: string | undefined): boolean {
   const raw = value?.trim();
   if (!raw) return false;
@@ -241,6 +285,16 @@ function permissionSubject(permission: HostedPermission): SubjectType {
   if (permission.startsWith("tenant:")) return "tenant";
   if (permission.startsWith("connector:")) return "connector";
   return "project";
+}
+
+function shouldAuditAllowedHostedRequest(method: string, path: string): boolean {
+  if (method.toUpperCase() !== "POST") return true;
+  return ![
+    "/api/connectors/inbox",
+    "/api/connectors/inbox/batch",
+    "/api/connectors/github/mappings",
+    "/api/connectors/github/mappings/batch"
+  ].includes(path);
 }
 
 function clientIp(headers: Headers): string | null {

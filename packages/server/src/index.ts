@@ -14,6 +14,8 @@ import {
   connectorObservabilitySnapshot,
   githubConnectionInputSchema,
   githubConnectorAuthModel,
+  hasHostedPermission,
+  hostedPermissionForRequest,
   githubIssueMappingInputSchema,
   listGitHubConnections,
   listGitHubIssueMappings,
@@ -113,8 +115,9 @@ export function createApp(options: ServerOptions = {}) {
     c.set("configPath", options.configPath ?? process.env.UNBLOCK_CONFIG ?? defaultUnblockConfigPath());
     if (hosted) {
       c.set("hosted", hosted);
-      await syncHostedIdentity(store, hosted.identity);
-      const rateLimit = enforceHostedRateLimit(hosted.identity, options.hostedAuth ?? hostedRuntimeConfig());
+      const hostedConfig = options.hostedAuth ?? hostedRuntimeConfig();
+      await syncHostedIdentity(store, hosted.identity, hostedConfig.identitySyncTtlMs ?? 0);
+      const rateLimit = enforceHostedRateLimit(hosted.identity, hostedConfig);
       c.header("x-ratelimit-remaining", String(rateLimit.remaining));
       c.header("x-ratelimit-reset", String(Math.ceil(rateLimit.resetAt / 1000)));
     }
@@ -692,12 +695,15 @@ async function authorizeHosted(c: Context, projectId: string | null): Promise<vo
   const store = c.get("store");
   let effective = hosted;
   if (projectId) {
-    const projectRole = await store.hostedIdentity?.projectRole(projectId, hosted.identity.principalId);
-    if (projectRole) {
-      effective = {
-        ...hosted,
-        identity: withAdditionalHostedRoles(hosted.identity, [projectRole])
-      };
+    const permission = hostedPermissionForRequest(c.req.method, c.req.path);
+    if (!hasHostedPermission(hosted.identity, permission)) {
+      const projectRole = await store.hostedIdentity?.projectRole(projectId, hosted.identity.principalId);
+      if (projectRole) {
+        effective = {
+          ...hosted,
+          identity: withAdditionalHostedRoles(hosted.identity, [projectRole])
+        };
+      }
     }
   }
   await enforceHostedRequest(store, effective, c.req.method, c.req.path, projectId, c.req.raw);
