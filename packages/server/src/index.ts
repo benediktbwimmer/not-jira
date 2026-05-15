@@ -318,6 +318,26 @@ export function createApp(options: ServerOptions = {}) {
     return c.json({ ...result, observation });
   });
 
+  app.post("/api/connectors/inbox/batch", async (c) => {
+    await requireHosted(c);
+    const events = connectorEventSchema.array().parse(await c.req.json());
+    const results = [];
+    for (const event of events) {
+      await authorizeHosted(c, event.scope.projectId);
+      const result = await applyConnectorInboxEvent(c.get("store"), event, { source: "prism-flows" });
+      const observation = result.applied
+        ? await observeConnectorInboxEvent(c.get("store"), event, { evidence: result.evidence })
+        : null;
+      results.push({ ...result, observation });
+    }
+    return c.json({
+      count: results.length,
+      applied: results.filter((result) => result.applied).length,
+      duplicate: results.filter((result) => result.duplicate).length,
+      results
+    });
+  });
+
   app.get("/api/connectors/github/auth-model", async (c) => {
     await requireHosted(c);
     await authorizeHosted(c, null);
@@ -387,6 +407,17 @@ export function createApp(options: ServerOptions = {}) {
     const body = githubIssueMappingInputSchema.parse(await c.req.json());
     await authorizeHosted(c, body.projectId);
     return c.json(await upsertGitHubIssueMapping(c.get("store"), body), 201);
+  });
+
+  app.post("/api/connectors/github/mappings/batch", async (c) => {
+    await requireHosted(c);
+    const mappings = githubIssueMappingInputSchema.array().parse(await c.req.json());
+    const results = [];
+    for (const mapping of mappings) {
+      await authorizeHosted(c, mapping.projectId);
+      results.push(await upsertGitHubIssueMapping(c.get("store"), mapping));
+    }
+    return c.json({ count: results.length, results }, 201);
   });
 
   app.get("/api/tasks", async (c) => {

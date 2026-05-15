@@ -62,6 +62,20 @@ mapping, and closes the test issue by default. Use `--no-cleanup` to leave the
 issue open for inspection. Use `--allow-missing-env` for CI/preflight jobs that
 should report missing credentials without failing the job.
 
+To exercise the real GitHub webhook path instead of manually starting the
+inbound Flow, expose Prism Flows ingress publicly and pass:
+
+```sh
+UNBLOCK_SMOKE_GITHUB_WEBHOOK=1 \
+UNBLOCK_SMOKE_GITHUB_WEBHOOK_URL=https://example.ngrok-free.app/webhooks/github/issues \
+UNBLOCK_SMOKE_GITHUB_WEBHOOK_SECRET=... \
+deno run --allow-env --allow-net --allow-read packages/connector-flows-app/scripts/github_smoke.ts
+```
+
+In that mode the smoke creates a temporary GitHub `issues` webhook for the
+target repository, creates the disposable issue, waits for Unblock to ingest it
+through Prism ingress, then removes the webhook during cleanup.
+
 `GITHUB_TOKEN` is only the smoke runner token for creating, polling, and
 cleaning up the disposable issue. The deployed Flow app still needs its own
 configured `UNBLOCK_HOSTED_API_TOKEN` and `GITHUB_INSTALLATION_TOKEN` secrets.

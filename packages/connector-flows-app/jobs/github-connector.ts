@@ -1,4 +1,7 @@
-import { job, schemas } from "../../../../prism-new3/packages/prism-flows/mod.ts";
+import {
+  job,
+  schemas,
+} from "../../../../prism-new3/packages/prism-flows/mod.ts";
 
 export const githubWebhookInputSchema = schemas.object({
   deliveryId: schemas.string(),
@@ -68,6 +71,8 @@ export const githubBackfillNormalizeResultSchema = schemas.object({
     event: schemas.record(schemas.unknown()),
     mapping: schemas.record(schemas.unknown()),
   })),
+  mappings: schemas.array(schemas.record(schemas.unknown())),
+  events: schemas.array(schemas.record(schemas.unknown())),
   cursorEvent: schemas.record(schemas.unknown()),
 });
 
@@ -120,14 +125,22 @@ export function normalizeGitHubIssueWebhook(input: any) {
   const issue = input.payload.issue;
   const repository = input.payload.repository;
   if (!issue || !repository) {
-    return deadLetter(input, "missing_issue_payload", "GitHub webhook payload did not include issue and repository.");
+    return deadLetter(
+      input,
+      "missing_issue_payload",
+      "GitHub webhook payload did not include issue and repository.",
+    );
   }
 
   const owner = repository.owner?.login ?? repository.full_name?.split("/")[0];
   const repo = repository.name ?? repository.full_name?.split("/")[1];
   const issueNumber = Number(issue.number);
   if (!owner || !repo || !Number.isFinite(issueNumber)) {
-    return deadLetter(input, "invalid_issue_identity", "GitHub webhook payload did not include a stable issue identity.");
+    return deadLetter(
+      input,
+      "invalid_issue_identity",
+      "GitHub webhook payload did not include a stable issue identity.",
+    );
   }
 
   const taskId = `GH-${issueNumber}`;
@@ -142,8 +155,10 @@ export function normalizeGitHubIssueWebhook(input: any) {
   const base = {
     id: `github:${input.deliveryId}`,
     scope,
-    correlationId: `${input.scope.tenantId}:${input.scope.projectId}:external:github:issue:${external.id}`,
-    idempotencyKey: `${input.scope.tenantId}:${input.scope.projectId}:${input.scope.connectionId}:github-delivery:${input.deliveryId}`,
+    correlationId:
+      `${input.scope.tenantId}:${input.scope.projectId}:external:github:issue:${external.id}`,
+    idempotencyKey:
+      `${input.scope.tenantId}:${input.scope.projectId}:${input.scope.connectionId}:github-delivery:${input.deliveryId}`,
     external,
     evidence: {
       githubDeliveryId: input.deliveryId,
@@ -177,9 +192,14 @@ export function normalizeGitHubIssueWebhook(input: any) {
 }
 
 export function prepareGitHubIssueBackfill(input: any) {
-  const connection = input.connections.find((item: any) => item.id === input.input.connectionId) ?? input.connections[0];
+  const connection =
+    input.connections.find((item: any) =>
+      item.id === input.input.connectionId
+    ) ?? input.connections[0];
   if (!connection?.metadata) {
-    throw new Error(`No GitHub connection metadata available for ${input.input.connectionId}`);
+    throw new Error(
+      `No GitHub connection metadata available for ${input.input.connectionId}`,
+    );
   }
   const metadata = connection.metadata;
   const query = new URLSearchParams({ state: "all", per_page: "100" });
@@ -189,7 +209,9 @@ export function prepareGitHubIssueBackfill(input: any) {
   return {
     request: {
       method: "GET",
-      path: `/repos/${encodeURIComponent(metadata.repositoryOwner)}/${encodeURIComponent(metadata.repositoryName)}/issues?${query.toString()}`,
+      path: `/repos/${encodeURIComponent(metadata.repositoryOwner)}/${
+        encodeURIComponent(metadata.repositoryName)
+      }/issues?${query.toString()}`,
     },
     connection,
     scope: {
@@ -211,15 +233,20 @@ export function normalizeGitHubIssueBackfill(input: any) {
     const external = {
       system: "github",
       kind: "issue",
-      id: `${metadata.repositoryOwner}/${metadata.repositoryName}#${issue.number}`,
+      id:
+        `${metadata.repositoryOwner}/${metadata.repositoryName}#${issue.number}`,
       url: issue.html_url,
     };
     const event = {
       id: `github:backfill:${external.id}:${issue.updated_at}`,
-      kind: issue.state === "closed" ? "connector.inbound.task_archived" : "connector.inbound.task_upserted",
+      kind: issue.state === "closed"
+        ? "connector.inbound.task_archived"
+        : "connector.inbound.task_upserted",
       scope: input.prepared.scope,
-      correlationId: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:external:github:issue:${external.id}`,
-      idempotencyKey: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-backfill:${external.id}:${issue.updated_at}`,
+      correlationId:
+        `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:external:github:issue:${external.id}`,
+      idempotencyKey:
+        `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-backfill:${external.id}:${issue.updated_at}`,
       local: { kind: "task", id: taskId },
       external,
       task: taskPayload(issue, taskId),
@@ -231,20 +258,30 @@ export function normalizeGitHubIssueBackfill(input: any) {
     };
     return {
       event,
-      mapping: issueMappingFromConnection(input.prepared.scope.projectId, connection, issue, taskId, {
-        source: "github-backfill",
-      }),
+      mapping: issueMappingFromConnection(
+        input.prepared.scope.projectId,
+        connection,
+        issue,
+        taskId,
+        {
+          source: "github-backfill",
+        },
+      ),
     };
   });
   const observedAt = newestUpdatedAt(issues) ?? new Date().toISOString();
   return {
     items,
+    mappings: items.map((item: any) => item.mapping),
+    events: items.map((item: any) => item.event),
     cursorEvent: {
       id: `github:cursor:${input.prepared.scope.connectionId}:${observedAt}`,
       kind: "connector.cursor.updated",
       scope: input.prepared.scope,
-      correlationId: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:connection:${input.prepared.scope.connectionId}`,
-      idempotencyKey: `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-cursor:${observedAt}`,
+      correlationId:
+        `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:connection:${input.prepared.scope.connectionId}`,
+      idempotencyKey:
+        `${input.prepared.scope.tenantId}:${input.prepared.scope.projectId}:${input.prepared.scope.connectionId}:github-cursor:${observedAt}`,
       cursor: {
         name: input.prepared.cursorName,
         value: observedAt,
@@ -262,20 +299,28 @@ export function normalizeGitHubIssueBackfill(input: any) {
 export function prepareGitHubIssueOutbound(input: any) {
   const event = input.trigger.event;
   const task = input.task;
-  const connection = input.connections.find((item: any) => item.id === event.scope.connectionId) ?? input.connections[0];
+  const connection =
+    input.connections.find((item: any) =>
+      item.id === event.scope.connectionId
+    ) ?? input.connections[0];
   if (!connection?.metadata) {
-    throw new Error(`No GitHub connection metadata available for ${event.scope.connectionId}`);
+    throw new Error(
+      `No GitHub connection metadata available for ${event.scope.connectionId}`,
+    );
   }
   const metadata = connection.metadata;
   const owner = metadata.repositoryOwner;
   const repo = metadata.repositoryName;
-  const existingIssue = parseIssueNumber(event.external?.id) ?? parseIssueNumber(task.sourceAnchor);
+  const existingIssue = parseIssueNumber(event.external?.id) ??
+    parseIssueNumber(task.sourceAnchor);
   const title = task.title ?? event.task?.title ?? event.local?.id;
   const body = task.description ?? event.task?.description ?? "";
   const request = existingIssue
     ? {
       method: "PATCH",
-      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${existingIssue}`,
+      path: `/repos/${encodeURIComponent(owner)}/${
+        encodeURIComponent(repo)
+      }/issues/${existingIssue}`,
       body: {
         title,
         body,
@@ -284,7 +329,9 @@ export function prepareGitHubIssueOutbound(input: any) {
     }
     : {
       method: "POST",
-      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+      path: `/repos/${encodeURIComponent(owner)}/${
+        encodeURIComponent(repo)
+      }/issues`,
       body: {
         title,
         body,
@@ -294,7 +341,9 @@ export function prepareGitHubIssueOutbound(input: any) {
     request,
     connection,
     task,
-    idempotencyKey: `${event.idempotencyKey}:github:${existingIssue ?? "create"}`,
+    idempotencyKey: `${event.idempotencyKey}:github:${
+      existingIssue ?? "create"
+    }`,
   };
 }
 
@@ -336,7 +385,14 @@ function taskPayload(issue: any, taskId: string) {
   };
 }
 
-function issueMapping(input: any, owner: string, repo: string, issue: any, taskId: string, status: string) {
+function issueMapping(
+  input: any,
+  owner: string,
+  repo: string,
+  issue: any,
+  taskId: string,
+  status: string,
+) {
   return {
     projectId: input.scope.projectId,
     connectionId: input.scope.connectionId,
@@ -358,7 +414,13 @@ function issueMapping(input: any, owner: string, repo: string, issue: any, taskI
   };
 }
 
-function issueMappingFromConnection(projectId: string, connection: any, issue: any, taskId: string, metadata: Record<string, unknown>) {
+function issueMappingFromConnection(
+  projectId: string,
+  connection: any,
+  issue: any,
+  taskId: string,
+  metadata: Record<string, unknown>,
+) {
   return {
     projectId,
     connectionId: connection.id,
@@ -380,7 +442,9 @@ function issueMappingFromConnection(projectId: string, connection: any, issue: a
 function newestUpdatedAt(issues: any[]): string | null {
   return issues
     .map((issue) => issue.updated_at)
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .filter((value): value is string =>
+      typeof value === "string" && value.length > 0
+    )
     .sort()
     .at(-1) ?? null;
 }
@@ -399,9 +463,16 @@ function deadLetter(input: any, code: string, message: string) {
       id: `github:${input.deliveryId}:dead-letter`,
       kind: "connector.dead_letter.created",
       scope: { ...input.scope, provider: "github" },
-      correlationId: `${input.scope.tenantId}:${input.scope.projectId}:connection:${input.scope.connectionId}`,
-      idempotencyKey: `${input.scope.tenantId}:${input.scope.projectId}:${input.scope.connectionId}:github-delivery:${input.deliveryId}:dead-letter`,
-      error: { code, message, retryable: false, details: { githubEvent: input.event } },
+      correlationId:
+        `${input.scope.tenantId}:${input.scope.projectId}:connection:${input.scope.connectionId}`,
+      idempotencyKey:
+        `${input.scope.tenantId}:${input.scope.projectId}:${input.scope.connectionId}:github-delivery:${input.deliveryId}:dead-letter`,
+      error: {
+        code,
+        message,
+        retryable: false,
+        details: { githubEvent: input.event },
+      },
       evidence: { githubDeliveryId: input.deliveryId },
       occurredAt: new Date().toISOString(),
     },

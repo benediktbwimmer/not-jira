@@ -19,6 +19,15 @@ export interface GithubSmokeResult {
   };
 }
 
+export interface GithubE2EResult extends GithubSmokeResult {
+  issues: Array<{
+    number: number;
+    url: string;
+    taskId: string;
+    phase: string;
+  }>;
+}
+
 export interface SmokeStep {
   name: string;
   ok: boolean;
@@ -38,6 +47,16 @@ const REQUIRED_ENV = [
 
 export function missingGithubSmokeEnv(env: Env): string[] {
   const missing = REQUIRED_ENV.filter((key) => !env[key]?.trim());
+  if (usesRealGitHubWebhook(env)) {
+    for (
+      const key of [
+        "UNBLOCK_SMOKE_GITHUB_WEBHOOK_URL",
+        "UNBLOCK_SMOKE_GITHUB_WEBHOOK_SECRET",
+      ]
+    ) {
+      if (!env[key]?.trim()) missing.push(key);
+    }
+  }
   if (usesTrustedHeaders(env)) {
     for (
       const key of [
@@ -87,11 +106,29 @@ export async function runGithubSmoke(
   const [owner, repo] = parseRepository(required(env, "GITHUB_REPOSITORY"));
   const runId = now().toISOString().replace(/[:.]/g, "-");
   const title = `[unblock-smoke] ${runId}`;
+  const realWebhook = usesRealGitHubWebhook(env);
   const steps: SmokeStep[] = [];
   let issue: any | null = null;
+  let hook: any | null = null;
   let taskId = "";
 
   try {
+    if (realWebhook) {
+      hook = await timed(
+        steps,
+        "github.webhook.create",
+        () =>
+          createGitHubIssueWebhook(
+            fetchImpl,
+            githubToken,
+            owner,
+            repo,
+            required(env, "UNBLOCK_SMOKE_GITHUB_WEBHOOK_URL"),
+            required(env, "UNBLOCK_SMOKE_GITHUB_WEBHOOK_SECRET"),
+          ),
+      );
+    }
+
     issue = await timed(
       steps,
       "github.issue.create",
@@ -116,34 +153,36 @@ export async function runGithubSmoke(
     );
     taskId = `GH-${Number(issue.number)}`;
 
-    await timed(
-      steps,
-      "prism.github.inbound_flow",
-      () =>
-        startPrismFlow(env, prismRuntimeEndpoint, {
-          flowId: "github-issues-inbound",
-          prismProjectId,
-          tenantId,
-          projectId,
-          correlationId:
-            `${tenantId}:${projectId}:external:github:issue:${owner}/${repo}#${
-              Number(issue.number)
-            }`,
-          idempotencyKey:
-            `${tenantId}:${projectId}:${connectionId}:github-smoke-inbound:${runId}:${
-              Number(issue.number)
-            }`,
-          payload: githubWebhookPayload({
+    if (!realWebhook) {
+      await timed(
+        steps,
+        "prism.github.inbound_flow",
+        () =>
+          startPrismFlow(env, prismRuntimeEndpoint, {
+            flowId: "github-issues-inbound",
+            prismProjectId,
             tenantId,
             projectId,
-            connectionId,
-            owner,
-            repo,
-            issue,
-            runId,
+            correlationId:
+              `${tenantId}:${projectId}:external:github:issue:${owner}/${repo}#${
+                Number(issue.number)
+              }`,
+            idempotencyKey:
+              `${tenantId}:${projectId}:${connectionId}:github-smoke-inbound:${runId}:${
+                Number(issue.number)
+              }`,
+            payload: githubWebhookPayload({
+              tenantId,
+              projectId,
+              connectionId,
+              owner,
+              repo,
+              issue,
+              runId,
+            }),
           }),
-        }),
-    );
+      );
+    }
 
     const task: any = await timed(
       steps,
@@ -237,14 +276,31 @@ export async function runGithubSmoke(
     );
 
     await timed(steps, "unblock.github.mapping.read", async () => {
-      const mappings: any[] = await unblockJson(
-        fetchImpl,
-        baseUrl,
-        unblockAuth,
-        `/api/connectors/github/mappings?projectId=${
-          encodeURIComponent(projectId)
-        }&connectionId=${encodeURIComponent(connectionId)}&limit=100`,
-      );
+      const mappings: any[] = await waitForJson(() =>
+        unblockJson(
+          fetchImpl,
+          baseUrl,
+          unblockAuth,
+          `/api/connectors/github/mappings?projectId=${
+            encodeURIComponent(projectId)
+          }&connectionId=${encodeURIComponent(connectionId)}&limit=100`,
+        ), {
+        validate: (candidate: any[]) => {
+          const mappingMatchesIssue = (item: any) =>
+            (item.taskId ?? item.localId) === taskId &&
+            Number(item.issueNumber ?? item.metadata?.issueNumber) ===
+              Number(issue.number);
+          const mappingMatchesVersion = (item: any) =>
+            (item.taskId ?? item.localId) === taskId &&
+            (updatedTask.version == null ||
+              item.localVersion === String(updatedTask.version));
+          return Array.isArray(candidate) &&
+            candidate.some(mappingMatchesIssue) &&
+            candidate.some(mappingMatchesVersion);
+        },
+        timeoutMs: Number(env.UNBLOCK_SMOKE_TIMEOUT_MS ?? 30_000),
+        label: `GitHub mapping for ${taskId}`,
+      });
       const mappingMatchesIssue = (item: any) =>
         (item.taskId ?? item.localId) === taskId &&
         Number(item.issueNumber ?? item.metadata?.issueNumber) ===
@@ -295,6 +351,27 @@ export async function runGithubSmoke(
       },
     };
   } finally {
+    if (hook?.id) {
+      await timed(
+        steps,
+        "github.webhook.cleanup",
+        () =>
+          deleteGitHubWebhook(
+            fetchImpl,
+            githubToken,
+            owner,
+            repo,
+            Number(hook.id),
+          ),
+      ).catch((error) => {
+        steps.push({
+          name: "github.webhook.cleanup_error",
+          ok: false,
+          ms: 0,
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     if (cleanup && issue?.number) {
       await timed(
         steps,
@@ -322,6 +399,352 @@ export async function runGithubSmoke(
           detail: error instanceof Error ? error.message : String(error),
         });
       });
+    }
+  }
+}
+
+export async function runGithubE2E(
+  env: Env,
+  options: GithubSmokeOptions = {},
+): Promise<GithubE2EResult> {
+  const missing = missingGithubSmokeEnv({
+    ...env,
+    UNBLOCK_SMOKE_GITHUB_WEBHOOK: "1",
+  });
+  if (!env.PRISM_FLOWS_RUNTIME_PLAN?.trim()) {
+    missing.push("PRISM_FLOWS_RUNTIME_PLAN");
+  }
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      skipped: true,
+      missing,
+      steps: [{
+        name: "preflight",
+        ok: false,
+        ms: 0,
+        detail: `Missing required environment: ${missing.join(", ")}`,
+      }],
+      issues: [],
+    };
+  }
+
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const cleanup = options.cleanup !== false;
+  const now = options.now ?? (() => new Date());
+  const baseUrl = trimTrailingSlash(required(env, "UNBLOCK_HOSTED_API_URL"));
+  const unblockAuth = unblockAuthHeaders(env);
+  const prismRuntimeEndpoint = required(env, "PRISM_RUNTIME_ENDPOINT");
+  const prismProjectId = env.PRISM_FLOWS_PROJECT_ID?.trim() || "unblock-flows";
+  const tenantId = required(env, "UNBLOCK_TENANT_ID");
+  const projectId = required(env, "UNBLOCK_PROJECT_ID");
+  const connectionId = env.UNBLOCK_GITHUB_CONNECTION_ID?.trim() ||
+    "github-main";
+  const githubToken = required(env, "GITHUB_TOKEN");
+  const [owner, repo] = parseRepository(required(env, "GITHUB_REPOSITORY"));
+  const webhookUrl = required(env, "UNBLOCK_SMOKE_GITHUB_WEBHOOK_URL");
+  const webhookSecret = required(env, "UNBLOCK_SMOKE_GITHUB_WEBHOOK_SECRET");
+  const runtimePlanPath = required(env, "PRISM_FLOWS_RUNTIME_PLAN");
+  const timeoutMs = Number(env.UNBLOCK_SMOKE_TIMEOUT_MS ?? 30_000);
+  const runId = now().toISOString().replace(/[:.]/g, "-");
+  const steps: SmokeStep[] = [];
+  const issues: GithubE2EResult["issues"] = [];
+  const cleanupIssues: number[] = [];
+
+  try {
+    await timed(steps, "github.e2e.invalid_signature_rejected", async () => {
+      const response = await postSignedGitHubWebhook(fetchImpl, webhookUrl, {
+        secret: "wrong-secret",
+        deliveryId: `invalid-${runId}`,
+        event: "issues",
+        body: { action: "opened" },
+      });
+      if (response.status !== 401) {
+        throw new Error(
+          `Expected invalid signature to return 401, got ${response.status}.`,
+        );
+      }
+    });
+
+    const smoke = await runGithubSmoke({
+      ...env,
+      UNBLOCK_SMOKE_GITHUB_WEBHOOK: "1",
+    }, options);
+    steps.push(
+      ...smoke.steps.map((step) => ({ ...step, name: `smoke.${step.name}` })),
+    );
+    if (!smoke.ok || !smoke.issue) {
+      return { ...smoke, steps, issues, ok: false };
+    }
+    issues.push({ ...smoke.issue, phase: "webhook-outbound" });
+
+    const replayIssue = await timed(
+      steps,
+      "github.e2e.replay_issue.create",
+      () =>
+        createSmokeIssue(
+          fetchImpl,
+          githubToken,
+          owner,
+          repo,
+          `[unblock-e2e-replay] ${runId}`,
+          runId,
+        ),
+    );
+    cleanupIssues.push(Number(replayIssue.number));
+    issues.push({
+      number: Number(replayIssue.number),
+      url: String(replayIssue.html_url),
+      taskId: `GH-${Number(replayIssue.number)}`,
+      phase: "idempotent-replay",
+    });
+    await timed(steps, "github.e2e.idempotent_replay", async () => {
+      const payload = githubWebhookPayload({
+        tenantId,
+        projectId,
+        connectionId,
+        owner,
+        repo,
+        issue: replayIssue,
+        runId,
+      });
+      const deliveryId = `e2e-replay-${runId}-${replayIssue.number}`;
+      const first = await postSignedGitHubWebhook(fetchImpl, webhookUrl, {
+        secret: webhookSecret,
+        deliveryId,
+        event: "issues",
+        body: payload.payload,
+      });
+      const second = await postSignedGitHubWebhook(fetchImpl, webhookUrl, {
+        secret: webhookSecret,
+        deliveryId,
+        event: "issues",
+        body: payload.payload,
+      });
+      const firstBody = await first.json();
+      const secondBody = await second.json();
+      if (!first.ok || !second.ok) {
+        throw new Error(
+          `Replay webhook failed: ${first.status}/${second.status}`,
+        );
+      }
+      if (firstBody.created !== true || secondBody.created !== false) {
+        throw new Error(
+          `Expected replay to attach on second delivery: ${
+            JSON.stringify({ firstBody, secondBody })
+          }`,
+        );
+      }
+    });
+    await waitForTask(
+      fetchImpl,
+      baseUrl,
+      unblockAuth,
+      projectId,
+      `GH-${Number(replayIssue.number)}`,
+      replayIssue.title,
+      timeoutMs,
+    );
+
+    const manualCursor = new Date(Date.now() - 60_000).toISOString();
+    const manualIssue = await timed(
+      steps,
+      "github.e2e.manual_reconcile_issue.create",
+      () =>
+        createSmokeIssue(
+          fetchImpl,
+          githubToken,
+          owner,
+          repo,
+          `[unblock-e2e-manual] ${runId}`,
+          runId,
+        ),
+    );
+    cleanupIssues.push(Number(manualIssue.number));
+    await timed(
+      steps,
+      "github.e2e.manual_reconcile_issue.visible",
+      () =>
+        waitForGitHubIssueListVisibility(
+          fetchImpl,
+          githubToken,
+          owner,
+          repo,
+          Number(manualIssue.number),
+          manualCursor,
+          timeoutMs,
+        ),
+    );
+    issues.push({
+      number: Number(manualIssue.number),
+      url: String(manualIssue.html_url),
+      taskId: `GH-${Number(manualIssue.number)}`,
+      phase: "manual-reconcile",
+    });
+    await timed(
+      steps,
+      "prism.github.manual_reconcile_flow",
+      () =>
+        startPrismFlow(env, prismRuntimeEndpoint, {
+          flowId: "github-issues-reconcile",
+          prismProjectId,
+          tenantId,
+          projectId,
+          correlationId:
+            `${tenantId}:${projectId}:${connectionId}:manual-reconcile:${runId}`,
+          idempotencyKey:
+            `${tenantId}:${projectId}:${connectionId}:manual-reconcile:${runId}`,
+          payload: {
+            tenantId,
+            projectId,
+            connectionId,
+            cursor: manualCursor,
+            reason: "manual-e2e",
+          },
+        }),
+    );
+    await waitForTask(
+      fetchImpl,
+      baseUrl,
+      unblockAuth,
+      projectId,
+      `GH-${Number(manualIssue.number)}`,
+      manualIssue.title,
+      timeoutMs,
+    );
+
+    const scheduledCursor = new Date(Date.now() - 60_000).toISOString();
+    const scheduledIssue = await timed(
+      steps,
+      "github.e2e.scheduled_reconcile_issue.create",
+      () =>
+        createSmokeIssue(
+          fetchImpl,
+          githubToken,
+          owner,
+          repo,
+          `[unblock-e2e-scheduled] ${runId}`,
+          runId,
+        ),
+    );
+    cleanupIssues.push(Number(scheduledIssue.number));
+    await timed(
+      steps,
+      "github.e2e.scheduled_reconcile_issue.visible",
+      () =>
+        waitForGitHubIssueListVisibility(
+          fetchImpl,
+          githubToken,
+          owner,
+          repo,
+          Number(scheduledIssue.number),
+          scheduledCursor,
+          timeoutMs,
+        ),
+    );
+    issues.push({
+      number: Number(scheduledIssue.number),
+      url: String(scheduledIssue.html_url),
+      taskId: `GH-${Number(scheduledIssue.number)}`,
+      phase: "scheduled-reconcile",
+    });
+    await timed(steps, "prism.github.scheduled_reconcile_flow", async () => {
+      const { admitDueSchedules } = await import(
+        "../../../../prism-new3/packages/prism-flows/schedules.ts"
+      );
+      const { DenoGrpcPrismFlowClient } = await import(
+        "../../../../prism-new3/packages/prism-flows/execution-deno.ts"
+      );
+      const runtimePlan = JSON.parse(await Deno.readTextFile(runtimePlanPath));
+      const client = new DenoGrpcPrismFlowClient({
+        endpoint: prismRuntimeEndpoint,
+        runtimePlan,
+        defaultProjectId: prismProjectId,
+        timeoutMs,
+      });
+      try {
+        const results = await admitDueSchedules({
+          runtimePlan,
+          client,
+          projectId: prismProjectId,
+          tenantId,
+          unblockProjectId: projectId,
+          connectionId,
+          force: true,
+          now: now(),
+          payloadOverlay: {
+            tenantId,
+            projectId,
+            connectionId,
+            cursor: scheduledCursor,
+            reason: "scheduled-e2e",
+          },
+        });
+        if (
+          !results.some((result) =>
+            result.due && result.trigger.flowId === "github-issues-reconcile"
+          )
+        ) {
+          throw new Error(
+            `Scheduled reconcile trigger did not start: ${
+              JSON.stringify(results)
+            }`,
+          );
+        }
+      } finally {
+        client.close();
+      }
+    });
+    await waitForTask(
+      fetchImpl,
+      baseUrl,
+      unblockAuth,
+      projectId,
+      `GH-${Number(scheduledIssue.number)}`,
+      scheduledIssue.title,
+      timeoutMs,
+    );
+    await timed(steps, "unblock.github.cursor.confirm", async () => {
+      const status = await waitForJson(() =>
+        unblockJson(
+          fetchImpl,
+          baseUrl,
+          unblockAuth,
+          `/api/connectors/status?projectId=${
+            encodeURIComponent(projectId)
+          }&limit=20`,
+        ), {
+        validate: (candidate: any) =>
+          candidate?.connections?.some((connection: any) =>
+            connection.id === connectionId &&
+            connection.cursors?.some((cursor: any) =>
+              cursor.name === "issues.updated_at"
+            )
+          ),
+        timeoutMs,
+        label: "GitHub reconciliation cursor",
+      });
+      return status;
+    });
+
+    return { ok: true, steps, issue: smoke.issue, issues };
+  } finally {
+    if (cleanup) {
+      for (const issueNumber of cleanupIssues) {
+        await timed(
+          steps,
+          `github.e2e.issue_${issueNumber}.cleanup`,
+          () =>
+            closeGitHubIssue(fetchImpl, githubToken, owner, repo, issueNumber),
+        ).catch((error) => {
+          steps.push({
+            name: `github.e2e.issue_${issueNumber}.cleanup_error`,
+            ok: false,
+            ms: 0,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
     }
   }
 }
@@ -428,30 +851,34 @@ async function startPrismFlow(env: Env, endpoint: string, input: {
   payload: unknown;
 }) {
   const client = await prismFlowClient(env, endpoint, input.prismProjectId);
-  return await client.startFlow({
-    projectId: input.prismProjectId,
-    shardId: `tenant:${input.tenantId}:project:${input.projectId}`,
-    appId: "flows",
-    flowId: input.flowId,
-    workflowId: input.flowId,
-    triggerId: input.flowId === "github-issues-inbound"
-      ? "github.issues"
-      : "manual",
-    flowKey: input.idempotencyKey,
-    idempotencyKey: input.idempotencyKey,
-    tenantId: input.tenantId,
-    unblockProjectId: input.projectId,
-    correlationId: input.correlationId,
-    payload: input.payload,
-    metadata: {
-      tenantId: input.tenantId,
-      projectId: input.projectId,
-      correlationId: input.correlationId,
+  try {
+    return await client.startFlow({
+      projectId: input.prismProjectId,
+      shardId: `tenant:${input.tenantId}:project:${input.projectId}`,
+      appId: "flows",
+      flowId: input.flowId,
+      workflowId: input.flowId,
+      triggerId: input.flowId === "github-issues-inbound"
+        ? "github.issues"
+        : "manual",
+      flowKey: input.idempotencyKey,
       idempotencyKey: input.idempotencyKey,
-      source: "github_smoke",
-    },
-    mode: "attach_or_start",
-  });
+      tenantId: input.tenantId,
+      unblockProjectId: input.projectId,
+      correlationId: input.correlationId,
+      payload: input.payload,
+      metadata: {
+        tenantId: input.tenantId,
+        projectId: input.projectId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+        source: "github_smoke",
+      },
+      mode: "attach_or_start",
+    });
+  } finally {
+    await client.close?.();
+  }
 }
 
 async function prismFlowClient(
@@ -512,6 +939,192 @@ async function githubJson(
       ...init.headers,
     },
   });
+}
+
+async function createSmokeIssue(
+  fetchImpl: typeof fetch,
+  token: string,
+  owner: string,
+  repo: string,
+  title: string,
+  runId: string,
+) {
+  return await githubJson(
+    fetchImpl,
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+    {
+      method: "POST",
+      body: {
+        title,
+        body: [
+          "Created by the hosted Unblock GitHub connector e2e runner.",
+          `Run: ${runId}`,
+        ].join("\n\n"),
+      },
+    },
+  );
+}
+
+async function waitForGitHubIssueListVisibility(
+  fetchImpl: typeof fetch,
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  since: string,
+  timeoutMs: number,
+) {
+  return await waitForJson(() =>
+    githubJson(
+      fetchImpl,
+      token,
+      `/repos/${encodeURIComponent(owner)}/${
+        encodeURIComponent(repo)
+      }/issues?state=all&per_page=100&since=${encodeURIComponent(since)}`,
+    ), {
+    validate: (candidate: any) =>
+      Array.isArray(candidate) &&
+      candidate.some((issue) => Number(issue?.number) === issueNumber),
+    timeoutMs,
+    label: `GitHub issue list visibility for #${issueNumber}`,
+  });
+}
+
+async function closeGitHubIssue(
+  fetchImpl: typeof fetch,
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+) {
+  return await githubJson(
+    fetchImpl,
+    token,
+    `/repos/${encodeURIComponent(owner)}/${
+      encodeURIComponent(repo)
+    }/issues/${issueNumber}`,
+    {
+      method: "PATCH",
+      body: {
+        state: "closed",
+        state_reason: "not_planned",
+      },
+    },
+  );
+}
+
+async function waitForTask(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  unblockAuth: Record<string, string>,
+  projectId: string,
+  taskId: string,
+  title: string,
+  timeoutMs: number,
+) {
+  return await waitForJson(() =>
+    unblockJson(
+      fetchImpl,
+      baseUrl,
+      unblockAuth,
+      `/api/tasks/${encodeURIComponent(taskId)}?projectId=${
+        encodeURIComponent(projectId)
+      }`,
+    ), {
+    validate: (candidate: any) =>
+      candidate?.id === taskId && candidate?.title === title,
+    timeoutMs,
+    label: `task ${taskId}`,
+  });
+}
+
+async function postSignedGitHubWebhook(
+  fetchImpl: typeof fetch,
+  url: string,
+  input: {
+    secret: string;
+    deliveryId: string;
+    event: string;
+    body: unknown;
+  },
+): Promise<Response> {
+  const raw = JSON.stringify(input.body);
+  const signature = await hmacSha256Hex(input.secret, raw);
+  return await fetchImpl(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-delivery": input.deliveryId,
+      "x-github-event": input.event,
+      "x-hub-signature-256": `sha256=${signature}`,
+    },
+    body: raw,
+  });
+}
+
+async function hmacSha256Hex(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(body),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function createGitHubIssueWebhook(
+  fetchImpl: typeof fetch,
+  token: string,
+  owner: string,
+  repo: string,
+  url: string,
+  secret: string,
+) {
+  return await githubJson(
+    fetchImpl,
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
+    {
+      method: "POST",
+      body: {
+        name: "web",
+        active: true,
+        events: ["issues"],
+        config: {
+          url,
+          content_type: "json",
+          secret,
+          insecure_ssl: "0",
+        },
+      },
+    },
+  );
+}
+
+async function deleteGitHubWebhook(
+  fetchImpl: typeof fetch,
+  token: string,
+  owner: string,
+  repo: string,
+  hookId: number,
+) {
+  return await githubJson(
+    fetchImpl,
+    token,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks/${
+      encodeURIComponent(String(hookId))
+    }`,
+    { method: "DELETE" },
+  );
 }
 
 interface JsonRequest {
@@ -621,6 +1234,11 @@ function usesTrustedHeaders(env: Env): boolean {
     env.UNBLOCK_SMOKE_AUTH_MODE?.trim() === "trusted-headers";
 }
 
+function usesRealGitHubWebhook(env: Env): boolean {
+  return env.UNBLOCK_SMOKE_GITHUB_WEBHOOK?.trim() === "1" ||
+    !!env.UNBLOCK_SMOKE_GITHUB_WEBHOOK_URL?.trim();
+}
+
 function required(env: Env, key: string): string {
   const value = env[key]?.trim();
   if (!value) throw new Error(`${key} is required.`);
@@ -634,10 +1252,16 @@ function trimTrailingSlash(value: string): string {
 if (import.meta.main) {
   const allowMissingEnv = Deno.args.includes("--allow-missing-env");
   const cleanup = !Deno.args.includes("--no-cleanup");
-  const result = await runGithubSmoke(Deno.env.toObject(), {
-    allowMissingEnv,
-    cleanup,
-  });
+  const fullE2E = Deno.args.includes("--full-e2e");
+  const result = fullE2E
+    ? await runGithubE2E(Deno.env.toObject(), {
+      allowMissingEnv,
+      cleanup,
+    })
+    : await runGithubSmoke(Deno.env.toObject(), {
+      allowMissingEnv,
+      cleanup,
+    });
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok && !(result.skipped && allowMissingEnv)) {
     Deno.exit(result.skipped ? 2 : 1);

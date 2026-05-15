@@ -281,6 +281,46 @@ describe("hosted authorization", () => {
     await expect(listed.json()).resolves.toMatchObject([{ externalId: "acme/repo#42", localId: "GH-42" }]);
   });
 
+  it("accepts bulk GitHub mapping and connector inbox reconciliation writes", async () => {
+    const store = await seededStore();
+    installConnectorState(store);
+    const app = createApp({ backend: "hosted", storeFactory: () => store, hostedAuth });
+
+    const mappings = await app.request("/api/connectors/github/mappings/batch", {
+      method: "POST",
+      headers: { ...hostedHeaders("connector_admin"), "content-type": "application/json" },
+      body: JSON.stringify([{
+        projectId: "HOSTED",
+        connectionId: "github-main",
+        repositoryOwner: "acme",
+        repositoryName: "repo",
+        issueNumber: 43,
+        issueUrl: "https://github.com/acme/repo/issues/43",
+        taskId: "GH-43",
+        externalVersion: "etag-43",
+        localVersion: "1"
+      }])
+    });
+    expect(mappings.status).toBe(201);
+    await expect(mappings.json()).resolves.toMatchObject({ count: 1, results: [{ localId: "GH-43" }] });
+
+    const event = connectorEvent({
+      kind: "connector.inbound.task_upserted",
+      scope: { tenantId: "ORG_HOSTED", projectId: "HOSTED", connectionId: "github-main", provider: "github" },
+      external: { system: "github", kind: "issue", id: "43", url: "https://github.com/acme/repo/issues/43" },
+      task: { id: "GH-43", title: "Bulk imported issue", lifecycle: "open" },
+      evidence: {}
+    });
+    const inbox = await app.request("/api/connectors/inbox/batch", {
+      method: "POST",
+      headers: { ...hostedHeaders("connector_admin"), "content-type": "application/json" },
+      body: JSON.stringify([event, event])
+    });
+    expect(inbox.status).toBe(200);
+    await expect(inbox.json()).resolves.toMatchObject({ count: 2, applied: 1, duplicate: 1 });
+    await expect(store.tasks.get("HOSTED", "GH-43")).resolves.toMatchObject({ title: "Bulk imported issue" });
+  });
+
   it("applies hosted connector inbox events and records observability", async () => {
     const store = await seededStore();
     installConnectorState(store);

@@ -1,17 +1,33 @@
-import { flow, manual, schedule, webhook } from "../../../../prism-new3/packages/prism-flows/mod.ts";
+import {
+  flow,
+  manual,
+  schedule,
+  webhook,
+} from "../../../../prism-new3/packages/prism-flows/mod.ts";
 import { connectorDispatchInputSchema } from "../jobs/mock-connector.ts";
-import { githubReconcileInputSchema, githubWebhookInputSchema } from "../jobs/github-connector.ts";
+import {
+  githubReconcileInputSchema,
+  githubWebhookInputSchema,
+} from "../jobs/github-connector.ts";
 
 flow("github-issues-inbound", {
   trigger: webhook("github.issues", {
     path: "/webhooks/github/issues",
     signature: "github",
     dedupeKey: (input: any) => input.deliveryId,
-    correlationKeys: [(input: any) => `${input.scope.projectId}:${input.scope.connectionId}:${input.payload.repository?.full_name ?? "unknown"}`],
+    correlationKeys: [
+      (input: any) =>
+        `${input.scope.projectId}:${input.scope.connectionId}:${
+          input.payload.repository?.full_name ?? "unknown"
+        }`,
+    ],
     schema: githubWebhookInputSchema,
   }),
   concurrency: {
-    key: (input: any) => `${input.scope.projectId}:${input.scope.connectionId}:${input.payload.issue?.number ?? input.deliveryId}`,
+    key: (input: any) =>
+      `${input.scope.projectId}:${input.scope.connectionId}:${
+        input.payload.issue?.number ?? input.deliveryId
+      }`,
     policy: "queue",
   },
   permissions: {
@@ -25,14 +41,21 @@ flow("github-issues-inbound", {
     direction: "inbound",
   },
   run: async (ctx, input: any) => {
-    const normalized: any = await ctx.deno("normalizeGitHubIssueWebhook", input);
+    const normalized: any = await ctx.deno(
+      "normalizeGitHubIssueWebhook",
+      input,
+    );
     if (normalized.mapping) {
       await ctx.http("unblock-hosted-api", {
         method: "POST",
         path: "/api/connectors/github/mappings",
         body: normalized.mapping,
         idempotencyKey: `${normalized.event.idempotencyKey}:mapping`,
-        retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+        retry: {
+          maxAttempts: 8,
+          backoff: "exponential",
+          retryOn: ["429", "5xx", "network"],
+        },
       });
     }
     return await ctx.http("unblock-hosted-api", {
@@ -41,7 +64,11 @@ flow("github-issues-inbound", {
       body: normalized.event,
       idempotencyKey: normalized.event.idempotencyKey,
       outcomeRecovery: "reconcile_by_external_id",
-      retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
   },
 });
@@ -49,7 +76,9 @@ flow("github-issues-inbound", {
 flow("github-issues-outbound", {
   trigger: manual(connectorDispatchInputSchema),
   concurrency: {
-    key: (input: any) => input.event?.correlationId ?? input.event?.idempotencyKey ?? "github-outbound",
+    key: (input: any) =>
+      input.event?.correlationId ?? input.event?.idempotencyKey ??
+        "github-outbound",
     policy: "queue",
   },
   permissions: {
@@ -68,29 +97,56 @@ flow("github-issues-outbound", {
     const [task, connections]: any[] = await Promise.all([
       ctx.http("unblock-hosted-api", {
         method: "GET",
-        path: `/api/tasks/${encodeURIComponent(taskId)}?projectId=${encodeURIComponent(event.scope.projectId)}`,
-        retry: { maxAttempts: 4, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+        path: `/api/tasks/${encodeURIComponent(taskId)}?projectId=${
+          encodeURIComponent(event.scope.projectId)
+        }`,
+        retry: {
+          maxAttempts: 4,
+          backoff: "exponential",
+          retryOn: ["429", "5xx", "network"],
+        },
       }),
       ctx.http("unblock-hosted-api", {
         method: "GET",
-        path: `/api/connectors/github/connections?projectId=${encodeURIComponent(event.scope.projectId)}`,
-        retry: { maxAttempts: 4, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+        path: `/api/connectors/github/connections?projectId=${
+          encodeURIComponent(event.scope.projectId)
+        }`,
+        retry: {
+          maxAttempts: 4,
+          backoff: "exponential",
+          retryOn: ["429", "5xx", "network"],
+        },
       }),
     ]);
-    const prepared: any = await ctx.deno("prepareGitHubIssueOutbound", { trigger: input, task, connections });
+    const prepared: any = await ctx.deno("prepareGitHubIssueOutbound", {
+      trigger: input,
+      task,
+      connections,
+    });
     const githubIssue: any = await ctx.http("github-api", {
       ...prepared.request,
       idempotencyKey: prepared.idempotencyKey,
       outcomeRecovery: "reconcile_by_external_id",
-      retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
-    const finalized: any = await ctx.deno("finalizeGitHubIssueOutbound", { prepared, response: githubIssue });
+    const finalized: any = await ctx.deno("finalizeGitHubIssueOutbound", {
+      prepared,
+      response: githubIssue,
+    });
     return await ctx.http("unblock-hosted-api", {
       method: "POST",
       path: "/api/connectors/github/mappings",
       body: finalized.mapping,
       idempotencyKey: `${prepared.idempotencyKey}:mapping`,
-      retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
   },
 });
@@ -110,7 +166,8 @@ flow("github-issues-reconcile", {
     }),
   ],
   concurrency: {
-    key: (input: any) => `${input.projectId}:${input.connectionId}:github-reconcile`,
+    key: (input: any) =>
+      `${input.projectId}:${input.connectionId}:github-reconcile`,
     policy: "queue",
   },
   permissions: {
@@ -126,38 +183,65 @@ flow("github-issues-reconcile", {
   run: async (ctx, input: any) => {
     const connections: any = await ctx.http("unblock-hosted-api", {
       method: "GET",
-      path: `/api/connectors/github/connections?projectId=${encodeURIComponent(input.projectId)}`,
-      retry: { maxAttempts: 4, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      path: `/api/connectors/github/connections?projectId=${
+        encodeURIComponent(input.projectId)
+      }`,
+      retry: {
+        maxAttempts: 4,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
-    const prepared: any = await ctx.deno("prepareGitHubIssueBackfill", { input, connections });
+    const prepared: any = await ctx.deno("prepareGitHubIssueBackfill", {
+      input,
+      connections,
+    });
     const issues: any = await ctx.http("github-api", {
       ...prepared.request,
-      retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
-    const normalized: any = await ctx.deno("normalizeGitHubIssueBackfill", { prepared, response: issues });
-    for (const item of normalized.items) {
-      await ctx.http("unblock-hosted-api", {
-        method: "POST",
-        path: "/api/connectors/github/mappings",
-        body: item.mapping,
-        idempotencyKey: `${item.event.idempotencyKey}:mapping`,
-        retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
-      });
-      await ctx.http("unblock-hosted-api", {
-        method: "POST",
-        path: "/api/connectors/inbox",
-        body: item.event,
-        idempotencyKey: item.event.idempotencyKey,
-        outcomeRecovery: "reconcile_by_external_id",
-        retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
-      });
-    }
+    const normalized: any = await ctx.deno("normalizeGitHubIssueBackfill", {
+      prepared,
+      response: issues,
+    });
+    await ctx.http("unblock-hosted-api", {
+      method: "POST",
+      path: "/api/connectors/github/mappings/batch",
+      body: normalized.mappings,
+      idempotencyKey:
+        `${input.tenantId}:${input.projectId}:${input.connectionId}:github-backfill:${normalized.cursorEvent.cursor.observedAt}:mappings`,
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
+    });
+    await ctx.http("unblock-hosted-api", {
+      method: "POST",
+      path: "/api/connectors/inbox/batch",
+      body: normalized.events,
+      idempotencyKey:
+        `${input.tenantId}:${input.projectId}:${input.connectionId}:github-backfill:${normalized.cursorEvent.cursor.observedAt}:events`,
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
+    });
     return await ctx.http("unblock-hosted-api", {
       method: "POST",
       path: "/api/connectors/inbox",
       body: normalized.cursorEvent,
       idempotencyKey: normalized.cursorEvent.idempotencyKey,
-      retry: { maxAttempts: 8, backoff: "exponential", retryOn: ["429", "5xx", "network"] },
+      retry: {
+        maxAttempts: 8,
+        backoff: "exponential",
+        retryOn: ["429", "5xx", "network"],
+      },
     });
   },
 });
