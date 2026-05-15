@@ -3,6 +3,7 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import {
   createServices,
+  createPostgresPool,
   createPostgresStore,
   createSqliteStore,
   createHostedSecret,
@@ -30,6 +31,7 @@ import {
   publicUnblockConfig,
   readUnblockConfig,
   resolveUnblockStorageConfig,
+  runPostgresMigrations,
   updateUnblockConfig,
   type ComputedStatus,
   type AppStore,
@@ -64,8 +66,14 @@ export interface ServerOptions {
   hostedAuth?: ReturnType<typeof hostedRuntimeConfig> | undefined;
 }
 
+type SharedPostgresRuntime = {
+  pool: ReturnType<typeof createPostgresPool>;
+  migrations: Promise<void>;
+};
+
 export function createApp(options: ServerOptions = {}) {
   const app = new Hono();
+  const postgresRuntimes = new Map<string, SharedPostgresRuntime>();
   app.use("*", cors());
 
   app.get("/api/health", async (c) => c.json({
@@ -99,7 +107,7 @@ export function createApp(options: ServerOptions = {}) {
     const id = requestId(c.req.raw.headers);
     c.header("x-request-id", id);
     const hosted = await hostedContextForRequest(c, options, id);
-    const store = await openStore(options, hosted?.identity.tenantId);
+    const store = await openStore(options, hosted?.identity.tenantId, postgresRuntimes);
     c.set("services", createServices(store));
     c.set("store", store);
     c.set("configPath", options.configPath ?? process.env.UNBLOCK_CONFIG ?? defaultUnblockConfigPath());
@@ -747,7 +755,11 @@ declare module "hono" {
   }
 }
 
-async function openStore(options: ServerOptions, requestTenantId?: string | undefined): Promise<AppStore> {
+async function openStore(
+  options: ServerOptions,
+  requestTenantId?: string | undefined,
+  postgresRuntimes?: Map<string, SharedPostgresRuntime>,
+): Promise<AppStore> {
   if (options.storeFactory) {
     return await options.storeFactory();
   }
@@ -766,11 +778,47 @@ async function openStore(options: ServerOptions, requestTenantId?: string | unde
   if (storage.mode === "sqlite") {
     return createSqliteStore(defined({ databasePath: storage.sqlitePath, autoMigrate: true }));
   }
+  if (postgresRuntimes) {
+    const runtime = sharedPostgresRuntime(postgresRuntimes, storage.postgresUrl);
+    await runtime.migrations;
+    return await createPostgresStore({
+      pool: runtime.pool,
+      tenantId: requestTenantId ?? process.env.UNBLOCK_TENANT_ID,
+      autoMigrate: false
+    });
+  }
+
   return await createPostgresStore({
     connectionString: storage.postgresUrl,
     tenantId: requestTenantId ?? process.env.UNBLOCK_TENANT_ID,
     autoMigrate: true
   });
+}
+
+function sharedPostgresRuntime(
+  runtimes: Map<string, SharedPostgresRuntime>,
+  connectionString: string,
+): SharedPostgresRuntime {
+  const existing = runtimes.get(connectionString);
+  if (existing) return existing;
+  const pool = createPostgresPool({
+    connectionString,
+    max: positiveIntegerEnv("UNBLOCK_POSTGRES_POOL_MAX")
+  });
+  const migrations = (async () => {
+    const store = await createPostgresStore({ pool, autoMigrate: false });
+    await runPostgresMigrations(store);
+  })();
+  const runtime = { pool, migrations };
+  runtimes.set(connectionString, runtime);
+  return runtime;
+}
+
+function positiveIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 async function hostedContextForRequest(c: Context, options: ServerOptions, id: string): Promise<HostedRequestContext | null> {

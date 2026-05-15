@@ -14,7 +14,7 @@ connection("unblock-hosted-api", {
   network: {
     allowDomains: ["unblock-hosted.internal", "127.0.0.1", "localhost"],
   },
-  rateLimit: { concurrency: 32, requestsPerSecond: 100 },
+  rateLimit: { concurrency: 256, requestsPerSecond: 5000 },
   redaction: {
     request: ["authorization", "plaintext", "ciphertext"],
     response: ["ciphertext"],

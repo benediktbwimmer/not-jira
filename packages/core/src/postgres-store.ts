@@ -208,22 +208,37 @@ class PostgresHostedIdentityRepository implements HostedIdentityRepository {
   ) {}
 
   async sync(identity: HostedIdentity): Promise<void> {
+    if (identity.tenantId !== this.tenantId) {
+      validation("Hosted identity tenant does not match the store tenant.", {
+        identityTenantId: identity.tenantId,
+        storeTenantId: this.tenantId,
+      });
+    }
     const now = nowIso();
     await this.db.query(
       `
       insert into tenants (id, slug, name, workos_organization_id, created_at, updated_at, archived_at)
       values ($1, $2, $3, $4, $5, $5, null)
-      on conflict (id) do update set
-        workos_organization_id = excluded.workos_organization_id,
-        updated_at = excluded.updated_at
+      on conflict do nothing
     `,
       [
-        identity.tenantId,
-        identity.tenantId.toLowerCase(),
+        this.tenantId,
+        this.tenantId.toLowerCase(),
         identity.organizationId,
         identity.organizationId,
         now,
       ],
+    );
+    await this.db.query(
+      `
+      update tenants
+      set name = $2,
+        workos_organization_id = $3,
+        updated_at = $4,
+        archived_at = null
+      where id = $1
+    `,
+      [this.tenantId, identity.organizationId, identity.organizationId, now],
     );
     await this.db.query(
       `
@@ -678,6 +693,16 @@ export async function createPostgresStore(
     await runPostgresMigrations(store);
   }
   return store;
+}
+
+export function createPostgresPool(options: {
+  connectionString: string;
+  max?: number | undefined;
+}): pg.Pool {
+  return new pg.Pool({
+    connectionString: options.connectionString,
+    max: options.max,
+  });
 }
 
 export async function runPostgresMigrations(
