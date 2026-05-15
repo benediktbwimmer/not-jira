@@ -44,24 +44,12 @@ flow("github-issues-inbound", {
     const normalized: any = await ctx.deno(
       "normalizeGitHubIssueWebhook",
       input,
+      { placement: "inline-preferred" },
     );
-    if (normalized.mapping) {
-      await ctx.http("unblock-hosted-api", {
-        method: "POST",
-        path: "/api/connectors/github/mappings",
-        body: normalized.mapping,
-        idempotencyKey: `${normalized.event.idempotencyKey}:mapping`,
-        retry: {
-          maxAttempts: 8,
-          backoff: "exponential",
-          retryOn: ["429", "5xx", "network"],
-        },
-      });
-    }
     return await ctx.http("unblock-hosted-api", {
       method: "POST",
       path: "/api/connectors/inbox",
-      body: normalized.event,
+      body: { ...normalized.event, mapping: normalized.mapping },
       idempotencyKey: normalized.event.idempotencyKey,
       outcomeRecovery: "reconcile_by_external_id",
       retry: {
@@ -122,7 +110,7 @@ flow("github-issues-outbound", {
       trigger: input,
       task,
       connections,
-    });
+    }, { placement: "inline-preferred" });
     const githubIssue: any = await ctx.http("github-api", {
       ...prepared.request,
       idempotencyKey: prepared.idempotencyKey,
@@ -136,7 +124,7 @@ flow("github-issues-outbound", {
     const finalized: any = await ctx.deno("finalizeGitHubIssueOutbound", {
       prepared,
       response: githubIssue,
-    });
+    }, { placement: "inline-preferred" });
     return await ctx.http("unblock-hosted-api", {
       method: "POST",
       path: "/api/connectors/github/mappings",
@@ -195,7 +183,7 @@ flow("github-issues-reconcile", {
     const prepared: any = await ctx.deno("prepareGitHubIssueBackfill", {
       input,
       connections,
-    });
+    }, { placement: "inline-preferred" });
     const issues: any = await ctx.http("github-api", {
       ...prepared.request,
       retry: {
@@ -207,7 +195,7 @@ flow("github-issues-reconcile", {
     const normalized: any = await ctx.deno("normalizeGitHubIssueBackfill", {
       prepared,
       response: issues,
-    });
+    }, { placement: "inline-preferred" });
     await ctx.http("unblock-hosted-api", {
       method: "POST",
       path: "/api/connectors/github/mappings/batch",

@@ -2,6 +2,7 @@ import { validation } from "./errors.js";
 import { createServices } from "./services.js";
 import type { AppStore, InboxEventRepository, OutboxEventRepository } from "./store.js";
 import { nowIso, type InboxEvent, type OutboxEvent } from "./types.js";
+import { githubIssueMappingInputSchema, upsertGitHubIssueMapping } from "./github-connector.js";
 import {
   connectorEventSchema,
   connectorTriggerFromOutbox,
@@ -210,6 +211,7 @@ async function applyConnectorEventToStore(
   const services = createServices(store, { projectId: event.scope.projectId, ...provenance });
   if (event.kind === "connector.inbound.task_upserted") {
     if (!event.task) validation("connector.inbound.task_upserted requires task payload.");
+    const mapping = await persistConnectorMapping(store, event);
     const existing = await store.tasks.get(event.scope.projectId, event.task.id);
     if (existing) {
       const updated = await services.tasks.edit(event.task.id, {
@@ -221,7 +223,7 @@ async function applyConnectorEventToStore(
         sourceSection: event.external ? `${event.external.system}:${event.external.kind}` : existing.sourceSection,
         sourceAnchor: event.external?.id ?? existing.sourceAnchor
       });
-      return { action: "task.updated", taskId: updated.id, external: event.external ?? null };
+      return { action: "task.updated", taskId: updated.id, external: event.external ?? null, mapping };
     }
     const created = await services.tasks.add({
       id: event.task.id,
@@ -233,14 +235,15 @@ async function applyConnectorEventToStore(
       sourceSection: event.external ? `${event.external.system}:${event.external.kind}` : null,
       sourceAnchor: event.external?.id ?? null
     });
-    return { action: "task.created", taskId: created.id, external: event.external ?? null };
+    return { action: "task.created", taskId: created.id, external: event.external ?? null, mapping };
   }
 
   if (event.kind === "connector.inbound.task_archived") {
     const taskId = event.local?.id ?? event.task?.id;
     if (!taskId) validation("connector.inbound.task_archived requires local task id.");
     const archived = await services.tasks.archive(taskId);
-    return { action: "task.archived", taskId: archived.id, external: event.external ?? null };
+    const mapping = await persistConnectorMapping(store, event);
+    return { action: "task.archived", taskId: archived.id, external: event.external ?? null, mapping };
   }
 
   if (event.kind === "connector.inbound.comment_created") {
@@ -260,6 +263,25 @@ async function applyConnectorEventToStore(
   }
 
   return { action: "ignored", kind: event.kind };
+}
+
+async function persistConnectorMapping(
+  store: AppStore,
+  event: ConnectorEvent
+): Promise<Record<string, unknown> | null> {
+  if (!event.mapping) return null;
+  if (event.scope.provider === "github") {
+    const mapping = await upsertGitHubIssueMapping(store, githubIssueMappingInputSchema.parse(event.mapping));
+    return {
+      provider: mapping.provider,
+      externalKind: mapping.externalKind,
+      externalId: mapping.externalId,
+      localKind: mapping.localKind,
+      localId: mapping.localId,
+      status: mapping.status
+    };
+  }
+  validation(`Unsupported connector mapping provider: ${event.scope.provider}`);
 }
 
 function requireOutbox(outbox: OutboxEventRepository | undefined): OutboxEventRepository {

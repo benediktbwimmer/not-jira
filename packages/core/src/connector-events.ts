@@ -91,6 +91,7 @@ export const connectorEventSchema = z.object({
   local: connectorLocalRefSchema.optional(),
   external: connectorExternalRefSchema.optional(),
   cursor: connectorCursorSchema.optional(),
+  mapping: z.record(z.string(), z.unknown()).optional(),
   task: connectorTaskPayloadSchema.optional(),
   comment: connectorCommentPayloadSchema.optional(),
   error: connectorErrorSchema.optional(),

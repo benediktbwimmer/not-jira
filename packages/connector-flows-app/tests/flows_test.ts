@@ -158,7 +158,7 @@ Deno.test("hosted Unblock GitHub inbound Flow dedupes webhook deliveries", () =>
     throw new Error("GitHub inbound simulation did not normalize the webhook");
   }
   const httpRequests = simulation.events.filter((event) => event.kind === "http_request");
-  if (httpRequests.length < 2) {
-    throw new Error("GitHub inbound simulation did not write mapping and inbox HTTP requests");
+  if (httpRequests.length !== 1) {
+    throw new Error("GitHub inbound simulation should write one inbox HTTP request");
   }
 });

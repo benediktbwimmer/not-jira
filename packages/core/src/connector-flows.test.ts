@@ -9,8 +9,8 @@ import {
 } from "./connector-flows.js";
 import { createMemoryStore } from "./memory-store.js";
 import { createServices } from "./services.js";
-import type { InboxEventRepository, OutboxEventRepository } from "./store.js";
-import type { InboxEvent, OutboxEvent } from "./types.js";
+import type { ConnectorRepository, InboxEventRepository, OutboxEventRepository } from "./store.js";
+import type { ConnectorExternalMapping, InboxEvent, OutboxEvent } from "./types.js";
 import { nowIso } from "./types.js";
 
 describe("connector outbox publisher", () => {
@@ -86,12 +86,24 @@ describe("connector inbox applier", () => {
   it("applies Flow-produced task events exactly once", async () => {
     const store = createMemoryStore() as any;
     store.inbox = new FakeInbox();
+    store.connectors = new FakeConnectors();
     await createServices(store, { machine: "test", actor: "codex-e" }).projects.add({ id: "PROJECT", name: "Project" });
     const event = connectorEvent({
       kind: "connector.inbound.task_upserted",
-      scope: { tenantId: "TENANT", projectId: "PROJECT", connectionId: "mock-main", provider: "mock" },
-      external: { system: "mock", kind: "issue", id: "42", url: "https://example.com/issues/42" },
-      task: { id: "MOCK-42", title: "Imported issue", description: "From mock" }
+      scope: { tenantId: "TENANT", projectId: "PROJECT", connectionId: "github-main", provider: "github" },
+      external: { system: "github", kind: "issue", id: "acme/repo#42", url: "https://github.com/acme/repo/issues/42" },
+      task: { id: "GH-42", title: "Imported issue", description: "From GitHub" },
+      mapping: {
+        projectId: "PROJECT",
+        connectionId: "github-main",
+        repositoryOwner: "acme",
+        repositoryName: "repo",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/repo/issues/42",
+        taskId: "GH-42",
+        externalVersion: "etag-1",
+        conflictPolicy: "operator_review"
+      }
     });
 
     const first = await applyConnectorInboxEvent(store, event);
@@ -99,13 +111,15 @@ describe("connector inbox applier", () => {
 
     expect(first).toMatchObject({ applied: true, duplicate: false });
     expect(second).toMatchObject({ applied: false, duplicate: true });
-    await expect(store.tasks.get("PROJECT", "MOCK-42")).resolves.toMatchObject({
-      id: "MOCK-42",
+    await expect(store.tasks.get("PROJECT", "GH-42")).resolves.toMatchObject({
+      id: "GH-42",
       title: "Imported issue",
-      sourceDoc: "https://example.com/issues/42",
-      sourceSection: "mock:issue",
-      sourceAnchor: "42"
+      sourceDoc: "https://github.com/acme/repo/issues/42",
+      sourceSection: "github:issue",
+      sourceAnchor: "acme/repo#42"
     });
+    expect(store.connectors.mappings).toHaveLength(1);
+    expect(store.connectors.mappings[0]).toMatchObject({ externalId: "acme/repo#42", localId: "GH-42" });
   });
 
   it("applies Flow-produced comments with connector provenance", async () => {
@@ -221,5 +235,53 @@ class FakeInbox implements InboxEventRepository {
     if (!event) return null;
     Object.assign(event, { status: "dead", error, evidence: { ...event.evidence, ...evidence } });
     return event;
+  }
+}
+
+class FakeConnectors implements Partial<ConnectorRepository> {
+  mappings: ConnectorExternalMapping[] = [];
+
+  async upsertMapping(mapping: ConnectorExternalMapping) {
+    const index = this.mappings.findIndex((item) =>
+      item.projectId === mapping.projectId &&
+      item.connectionId === mapping.connectionId &&
+      item.externalKind === mapping.externalKind &&
+      item.externalId === mapping.externalId
+    );
+    if (index >= 0) this.mappings[index] = mapping;
+    else this.mappings.push(mapping);
+  }
+
+  async getMappingByExternal(
+    projectId: string,
+    connectionId: string,
+    externalKind: string,
+    externalId: string
+  ) {
+    return this.mappings.find((mapping) =>
+      mapping.projectId === projectId &&
+      mapping.connectionId === connectionId &&
+      mapping.externalKind === externalKind &&
+      mapping.externalId === externalId
+    ) ?? null;
+  }
+
+  async getMappingByLocal(
+    projectId: string,
+    connectionId: string,
+    localKind: string,
+    localId: string
+  ) {
+    return this.mappings.find((mapping) =>
+      mapping.projectId === projectId &&
+      mapping.connectionId === connectionId &&
+      mapping.localKind === localKind &&
+      mapping.localId === localId &&
+      mapping.archivedAt === null
+    ) ?? null;
+  }
+
+  async listMappings() {
+    return [...this.mappings];
   }
 }
