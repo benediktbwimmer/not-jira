@@ -308,7 +308,7 @@ describe("hosted authorization", () => {
       kind: "connector.inbound.task_upserted",
       scope: { tenantId: "ORG_HOSTED", projectId: "HOSTED", connectionId: "github-main", provider: "github" },
       external: { system: "github", kind: "issue", id: "43", url: "https://github.com/acme/repo/issues/43" },
-      task: { id: "GH-43", title: "Bulk imported issue", lifecycle: "open" },
+      task: { id: "GH-43", title: "Bulk imported issue", description: "", lifecycle: "open", priority: 2 },
       evidence: {}
     });
     const inbox = await app.request("/api/connectors/inbox/batch", {

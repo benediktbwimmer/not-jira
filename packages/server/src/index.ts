@@ -274,6 +274,30 @@ export function createApp(options: ServerOptions = {}) {
     }));
   });
 
+  app.get("/api/connectors/runs", async (c) => {
+    await requireHosted(c);
+    const projectId = c.req.query("projectId")?.trim();
+    await authorizeHosted(c, projectId ?? null);
+    const connectors = c.get("store").connectors;
+    if (!connectors) throw new UnblockError("validation", "Connector repository is not available.");
+    return c.json(await connectors.listSyncRuns({
+      projectId,
+      connectionId: c.req.query("connectionId")?.trim(),
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }));
+  });
+
+  app.get("/api/connectors/cursors", async (c) => {
+    await requireHosted(c);
+    const projectId = requireProjectId(c);
+    const connectionId = c.req.query("connectionId")?.trim();
+    if (!connectionId) throw new UnblockError("validation", "connectionId is required.");
+    await authorizeHosted(c, projectId);
+    const connectors = c.get("store").connectors;
+    if (!connectors) throw new UnblockError("validation", "Connector repository is not available.");
+    return c.json(await connectors.listCursors(projectId, connectionId));
+  });
+
   app.post("/api/connectors/reconcile", async (c) => {
     const hosted = await requireHosted(c);
     const body = await c.req.json<{
@@ -341,14 +365,54 @@ export function createApp(options: ServerOptions = {}) {
   app.get("/api/connectors/github/auth-model", async (c) => {
     await requireHosted(c);
     await authorizeHosted(c, null);
-    return c.json(githubConnectorAuthModel);
+    const publicBaseUrl = connectorPublicIngressUrl();
+    return c.json({
+      ...githubConnectorAuthModel,
+      webhook: {
+        url: publicBaseUrl ? `${publicBaseUrl}/webhooks/github/issues` : null,
+        secretPurpose: "github.webhook_secret",
+        events: githubConnectorAuthModel.subscribeEvents
+      }
+    });
+  });
+
+  app.get("/api/connectors/github/setup", async (c) => {
+    await requireHosted(c);
+    const projectId = c.req.query("projectId")?.trim() ?? null;
+    await authorizeHosted(c, projectId);
+    const publicBaseUrl = connectorPublicIngressUrl();
+    return c.json({
+      provider: "github",
+      projectId,
+      authModel: githubConnectorAuthModel.mode,
+      requiredPermissions: githubConnectorAuthModel.repositoryPermissions,
+      subscribeEvents: githubConnectorAuthModel.subscribeEvents,
+      requiredSecrets: [
+        { name: "github-private-key", purpose: "github.private_key" },
+        { name: "github-webhook-secret", purpose: "github.webhook_secret" }
+      ],
+      webhookUrl: publicBaseUrl ? `${publicBaseUrl}/webhooks/github/issues` : null,
+      connectionEndpoint: "/api/connectors/github/connections"
+    });
   });
 
   app.get("/api/connectors/github/connections", async (c) => {
     await requireHosted(c);
     const projectId = c.req.query("projectId")?.trim();
     await authorizeHosted(c, projectId ?? null);
-    return c.json(await listGitHubConnections(c.get("store"), projectId));
+    const connections = await listGitHubConnections(c.get("store"), projectId);
+    if (c.req.query("includeState") !== "true") return c.json(connections);
+    const connectors = c.get("store").connectors;
+    if (!connectors) return c.json(connections);
+    return c.json(await Promise.all(connections.map(async (connection) => ({
+      ...connection,
+      cursors: await connectors.listCursors(connection.projectId, connection.id),
+      recentRuns: await connectors.listSyncRuns({
+        projectId: connection.projectId,
+        connectionId: connection.id,
+        limit: parseOptionalInteger(c.req.query("runLimit")) ?? 10
+      })
+    }))));
   });
 
   app.post("/api/connectors/github/connections", async (c) => {
@@ -791,6 +855,15 @@ function parseRequiredInteger(value: string | undefined, name: string): number {
     throw new UnblockError("validation", `${name} is required.`);
   }
   return parsed;
+}
+
+function connectorPublicIngressUrl(): string | null {
+  return (
+    process.env.PRISM_PUBLIC_INGRESS_URL ??
+      process.env.UNBLOCK_CONNECTOR_INGRESS_URL ??
+      process.env.UNBLOCK_PUBLIC_BASE_URL ??
+      ""
+  ).replace(/\/+$/, "") || null;
 }
 
 function defined<T extends Record<string, unknown>>(value: T): T {

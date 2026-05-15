@@ -18,6 +18,7 @@ export interface StorageCrudBenchmarkOptions {
   comments?: number | undefined;
   activity?: number | undefined;
   audit?: number | undefined;
+  minOpsPerSecond?: number | undefined;
 }
 
 export interface StorageCrudBenchmarkPhase {
@@ -67,6 +68,7 @@ export interface MatcherReadBenchmarkOptions {
   comments?: number | undefined;
   iterations?: number | undefined;
   pollers?: number | undefined;
+  minOpsPerSecond?: number | undefined;
 }
 
 export interface MatcherReadBenchmarkPhase {
@@ -214,8 +216,9 @@ export async function runStorageCrudBenchmark(store: AppStore, options: StorageC
 
   const elapsedMs = roundMs(performance.now() - startedAt);
   const operations = phases.reduce((sum, phase) => sum + phase.count, 0);
+  const opsPerSecond = rate(operations, elapsedMs);
   return {
-    ok: true,
+    ok: options.minOpsPerSecond === undefined || opsPerSecond >= options.minOpsPerSecond,
     storage: {
       dialect: store.capabilities?.dialect ?? "unknown",
       transactionalWrites: store.capabilities?.transactionalWrites ?? false,
@@ -239,7 +242,7 @@ export async function runStorageCrudBenchmark(store: AppStore, options: StorageC
     totals: {
       operations,
       elapsedMs,
-      opsPerSecond: rate(operations, elapsedMs)
+      opsPerSecond
     }
   };
 }
@@ -350,8 +353,9 @@ export async function runMatcherReadBenchmark(store: AppStore, options: MatcherR
 
   const elapsedMs = roundMs(performance.now() - startedAt);
   const reads = phases.reduce((sum, phase) => sum + phase.count, 0);
+  const opsPerSecond = rate(reads, elapsedMs);
   return {
-    ok: true,
+    ok: options.minOpsPerSecond === undefined || opsPerSecond >= options.minOpsPerSecond,
     storage: {
       dialect: store.capabilities?.dialect ?? "unknown",
       matcherQuery: store.capabilities?.matcherQuery ?? "unknown"
@@ -370,7 +374,7 @@ export async function runMatcherReadBenchmark(store: AppStore, options: MatcherR
     totals: {
       reads,
       elapsedMs,
-      opsPerSecond: rate(reads, elapsedMs)
+      opsPerSecond
     }
   };
 }

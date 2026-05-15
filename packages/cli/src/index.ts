@@ -200,6 +200,7 @@ bench.command("storage")
   .option("--comments <count>", "comments to create", parseInteger)
   .option("--activity <count>", "standalone activity records to append", parseInteger)
   .option("--audit <count>", "hosted audit records to append when the store supports hosted audit", parseInteger)
+  .option("--min-ops-per-second <count>", "fail the command if total CRUD throughput is below this", parseFloatOption)
   .action(async (options: {
     projectId?: string;
     tasks?: number;
@@ -212,10 +213,11 @@ bench.command("storage")
     comments?: number;
     activity?: number;
     audit?: number;
+    minOpsPerSecond?: number;
   }) => {
     const store = await openStore();
     try {
-      print(await runStorageCrudBenchmark(store, {
+      const report = await runStorageCrudBenchmark(store, {
         projectId: options.projectId,
         machine: "storage-benchmark",
         actor: program.opts<GlobalOptions>().actor ?? "storage-benchmark",
@@ -228,8 +230,11 @@ bench.command("storage")
         instructions: options.instructions,
         comments: options.comments,
         activity: options.activity,
-        audit: options.audit
-      }), format());
+        audit: options.audit,
+        minOpsPerSecond: options.minOpsPerSecond
+      });
+      print(report, format());
+      if (!report.ok) process.exitCode = 1;
     } finally {
       await store.close?.();
     }
@@ -245,6 +250,7 @@ bench.command("matcher")
   .option("--comments <count>", "comments to seed", parseInteger)
   .option("--iterations <count>", "read iterations per phase", parseInteger)
   .option("--pollers <count>", "concurrent frontend pollers", parseInteger)
+  .option("--min-ops-per-second <count>", "fail the command if total read throughput is below this", parseFloatOption)
   .action(async (options: {
     projectId?: string;
     tasks?: number;
@@ -254,10 +260,11 @@ bench.command("matcher")
     comments?: number;
     iterations?: number;
     pollers?: number;
+    minOpsPerSecond?: number;
   }) => {
     const store = await openStore();
     try {
-      print(await runMatcherReadBenchmark(store, {
+      const report = await runMatcherReadBenchmark(store, {
         projectId: options.projectId,
         machine: "matcher-benchmark",
         actor: program.opts<GlobalOptions>().actor ?? "matcher-benchmark",
@@ -267,8 +274,11 @@ bench.command("matcher")
         instructions: options.instructions,
         comments: options.comments,
         iterations: options.iterations,
-        pollers: options.pollers
-      }), format());
+        pollers: options.pollers,
+        minOpsPerSecond: options.minOpsPerSecond
+      });
+      print(report, format());
+      if (!report.ok) process.exitCode = 1;
     } finally {
       await store.close?.();
     }
@@ -291,6 +301,8 @@ bench.command("matrix")
   .option("--read-tasks <count>", "matcher scenario task count", parseInteger)
   .option("--iterations <count>", "matcher scenario read iterations", parseInteger)
   .option("--pollers <count>", "matcher scenario concurrent frontend pollers", parseInteger)
+  .option("--min-storage-ops-per-second <count>", "fail storage scenarios below this throughput", parseFloatOption)
+  .option("--min-read-ops-per-second <count>", "fail matcher scenarios below this throughput", parseFloatOption)
   .option("--keep-sqlite", "keep the temporary SQLite database after the run")
   .action(async (options: {
     modes: string;
@@ -308,9 +320,13 @@ bench.command("matrix")
     readTasks?: number;
     iterations?: number;
     pollers?: number;
+    minStorageOpsPerSecond?: number;
+    minReadOpsPerSecond?: number;
     keepSqlite?: boolean;
   }) => {
-    print(await runBenchmarkMatrix(options), format());
+    const report = await runBenchmarkMatrix(options);
+    print(report, format());
+    if (!report.ok) process.exitCode = 1;
   });
 
 const configCommand = program.command("config").description("Configuration commands");
@@ -1282,6 +1298,8 @@ interface BenchmarkMatrixCommandOptions {
   readTasks?: number | undefined;
   iterations?: number | undefined;
   pollers?: number | undefined;
+  minStorageOpsPerSecond?: number | undefined;
+  minReadOpsPerSecond?: number | undefined;
   keepSqlite?: boolean | undefined;
 }
 
@@ -1337,7 +1355,8 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
               tasks: options.tasks,
               updates: options.updates,
               dependencyMutations: options.dependencyMutations,
-              audit: options.audit
+              audit: options.audit,
+              minOpsPerSecond: options.minStorageOpsPerSecond
             })
             : await runMatcherReadBenchmark(store, {
               projectId,
@@ -1345,7 +1364,8 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
               actor: "benchmark-matrix",
               tasks: options.readTasks,
               iterations: options.iterations,
-              pollers: options.pollers
+              pollers: options.pollers,
+              minOpsPerSecond: options.minReadOpsPerSecond
             });
           cases.push({
             mode,
@@ -1378,7 +1398,9 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
   }
 
   return {
-    ok: cases.every((item) => item.skipped || !item.error),
+    ok: cases.every((item) =>
+      item.skipped || (!item.error && (!isBenchmarkReport(item.report) || item.report.ok))
+    ),
     runId,
     modes,
     scenarios,
@@ -1859,6 +1881,18 @@ function parseInteger(value: string): number {
     throw new Error(`Invalid integer: ${value}`);
   }
   return parsed;
+}
+
+function parseFloatOption(value: string): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid number: ${value}`);
+  }
+  return parsed;
+}
+
+function isBenchmarkReport(value: unknown): value is { ok: boolean } {
+  return typeof value === "object" && value !== null && "ok" in value && typeof (value as { ok?: unknown }).ok === "boolean";
 }
 
 function parsePriority(value: string): Priority {

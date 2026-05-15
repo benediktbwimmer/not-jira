@@ -1,4 +1,8 @@
 import { loadFlowAppForTest } from "../../../../prism-new3/packages/prism-flows/testing.ts";
+import {
+  normalizeGitHubIssueBackfill,
+  prepareGitHubIssueBackfill,
+} from "../jobs/github-connector.ts";
 
 const app = await loadFlowAppForTest({
   entrypoint: new URL("../prism.flow.ts", import.meta.url),
@@ -52,5 +56,68 @@ Deno.test("GitHub flows retain idempotency and retry policy in source", async ()
     if (!source.includes(expected)) {
       throw new Error(`GitHub flow source is missing ${expected}`);
     }
+  }
+});
+
+Deno.test("GitHub reconcile uses stored cursors with a bounded replay window", () => {
+  const prepared = prepareGitHubIssueBackfill({
+    input: {
+      tenantId: "TENANT",
+      projectId: "PROJECT",
+      connectionId: "github-main",
+      replayWindowSeconds: 120,
+    },
+    connections: [{
+      id: "github-main",
+      metadata: {
+        repositoryOwner: "acme",
+        repositoryName: "repo",
+      },
+      cursors: [{
+        name: "issues.updated_at",
+        value: "2026-05-14T10:00:00.000Z",
+      }],
+    }],
+  });
+  if (!String(prepared.request.path).includes("since=2026-05-14T09%3A58%3A00.000Z")) {
+    throw new Error(`GitHub reconcile did not apply replay cursor: ${prepared.request.path}`);
+  }
+  if (prepared.effectiveCursor !== "2026-05-14T10:00:00.000Z") {
+    throw new Error("GitHub reconcile did not retain the stored effective cursor");
+  }
+});
+
+Deno.test("GitHub reconcile cursor never moves backward for replayed pages", () => {
+  const normalized = normalizeGitHubIssueBackfill({
+    prepared: {
+      connection: {
+        id: "github-main",
+        metadata: {
+          repositoryOwner: "acme",
+          repositoryName: "repo",
+        },
+      },
+      scope: {
+        tenantId: "TENANT",
+        projectId: "PROJECT",
+        connectionId: "github-main",
+        provider: "github",
+      },
+      cursorName: "issues.updated_at",
+      effectiveCursor: "2026-05-14T10:00:00.000Z",
+      requestStartedAt: "2026-05-14T10:05:00.000Z",
+      replayWindowSeconds: 300,
+    },
+    response: [{
+      number: 42,
+      title: "Replay",
+      body: "",
+      state: "open",
+      html_url: "https://github.com/acme/repo/issues/42",
+      updated_at: "2026-05-14T09:59:00.000Z",
+    }],
+  });
+  if (normalized.cursorEvent.cursor.value !== "2026-05-14T10:05:00.000Z") {
+    throw new Error(`Cursor moved to ${normalized.cursorEvent.cursor.value}`);
   }
 });

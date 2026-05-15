@@ -46,6 +46,7 @@ export const githubReconcileInputSchema = schemas.object({
   projectId: schemas.string(),
   connectionId: schemas.string(),
   cursor: schemas.string().optional(),
+  replayWindowSeconds: schemas.number().optional(),
   reason: schemas.string().optional(),
 });
 
@@ -59,6 +60,9 @@ export const githubBackfillPreparedSchema = schemas.object({
   connection: schemas.record(schemas.unknown()),
   scope: schemas.record(schemas.unknown()),
   cursorName: schemas.string(),
+  effectiveCursor: schemas.string().optional(),
+  requestStartedAt: schemas.string(),
+  replayWindowSeconds: schemas.number(),
 });
 
 export const githubBackfillNormalizeInputSchema = schemas.object({
@@ -202,9 +206,20 @@ export function prepareGitHubIssueBackfill(input: any) {
     );
   }
   const metadata = connection.metadata;
+  const cursorName = "issues.updated_at";
+  const storedCursor = Array.isArray(connection.cursors)
+    ? connection.cursors.find((cursor: any) => cursor.name === cursorName)
+      ?.value
+    : undefined;
+  const effectiveCursor = input.input.cursor ?? storedCursor;
+  const replayWindowSeconds = Math.max(
+    0,
+    Number(input.input.replayWindowSeconds ?? 300),
+  );
+  const requestStartedAt = new Date().toISOString();
   const query = new URLSearchParams({ state: "all", per_page: "100" });
-  if (input.input.cursor) {
-    query.set("since", input.input.cursor);
+  if (effectiveCursor) {
+    query.set("since", replayCursor(effectiveCursor, replayWindowSeconds));
   }
   return {
     request: {
@@ -220,7 +235,10 @@ export function prepareGitHubIssueBackfill(input: any) {
       connectionId: input.input.connectionId,
       provider: "github",
     },
-    cursorName: "issues.updated_at",
+    cursorName,
+    effectiveCursor,
+    requestStartedAt,
+    replayWindowSeconds,
   };
 }
 
@@ -269,7 +287,11 @@ export function normalizeGitHubIssueBackfill(input: any) {
       ),
     };
   });
-  const observedAt = newestUpdatedAt(issues) ?? new Date().toISOString();
+  const observedAt = nextCursorValue(
+    input.prepared.effectiveCursor,
+    newestUpdatedAt(issues),
+    input.prepared.requestStartedAt,
+  );
   return {
     items,
     mappings: items.map((item: any) => item.mapping),
@@ -290,6 +312,7 @@ export function normalizeGitHubIssueBackfill(input: any) {
       evidence: {
         source: "github-backfill",
         itemCount: issues.length,
+        replayWindowSeconds: input.prepared.replayWindowSeconds,
       },
       occurredAt: new Date().toISOString(),
     },
@@ -447,6 +470,26 @@ function newestUpdatedAt(issues: any[]): string | null {
     )
     .sort()
     .at(-1) ?? null;
+}
+
+function replayCursor(cursor: string, replayWindowSeconds: number): string {
+  const parsed = Date.parse(cursor);
+  if (!Number.isFinite(parsed)) return cursor;
+  return new Date(parsed - replayWindowSeconds * 1000).toISOString();
+}
+
+function nextCursorValue(
+  currentCursor: string | undefined,
+  newestIssueUpdatedAt: string | null,
+  requestStartedAt: string,
+): string {
+  const candidates = [currentCursor, newestIssueUpdatedAt, requestStartedAt]
+    .filter((value): value is string =>
+      typeof value === "string" && value.length > 0
+    )
+    .filter((value) => Number.isFinite(Date.parse(value)))
+    .sort();
+  return candidates.at(-1) ?? new Date().toISOString();
 }
 
 function parseIssueNumber(value: unknown): number | null {

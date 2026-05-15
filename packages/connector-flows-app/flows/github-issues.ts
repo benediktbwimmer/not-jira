@@ -185,7 +185,7 @@ flow("github-issues-reconcile", {
       method: "GET",
       path: `/api/connectors/github/connections?projectId=${
         encodeURIComponent(input.projectId)
-      }`,
+      }&includeState=true`,
       retry: {
         maxAttempts: 4,
         backoff: "exponential",
