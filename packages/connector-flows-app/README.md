@@ -106,3 +106,32 @@ by the connector, signs outgoing `issues` webhooks with the configured hook
 secret, records deliveries under `/_sim/deliveries`, exposes state at
 `/_sim/state`, and can force primary, secondary, and content creation rate-limit
 responses for benchmark scenarios.
+
+Run the full local simulator harness when a Postgres database is available:
+
+```sh
+UNBLOCK_E2E_POSTGRES_URL=postgres://localhost/unblock_sim \
+deno run --allow-env --allow-net --allow-read --allow-write --allow-run \
+  packages/connector-flows-app/scripts/github_simulator_harness.ts --mode=e2e
+```
+
+The harness boots hosted-mode Unblock, Prism serve with supervised Flow
+executors and native Rust webhook ingress, plus the GitHub simulator; creates a
+temporary project, hosted secrets, and GitHub connector connection; then runs
+the full webhook/outbound/manual-reconcile/scheduled-reconcile E2E without ngrok
+or live GitHub. Use `PRISM_POSTGRES_URL` to put Prism on a separate database.
+
+Benchmark modes reuse the same real runtime path:
+
+```sh
+UNBLOCK_E2E_POSTGRES_URL=postgres://localhost/unblock_sim \
+deno run --allow-env --allow-net --allow-read --allow-write --allow-run \
+  packages/connector-flows-app/scripts/github_simulator_harness.ts \
+  --mode=benchmark-reconcile --issues=10000
+```
+
+`benchmark-reconcile` bulk-seeds simulator issues and times one reconciliation
+Flow. `benchmark-webhook` creates issues through the simulator REST API, lets
+the simulator deliver signed webhooks to Prism ingress, and waits for Unblock
+tasks. The harness prefers Prism release binaries from `target/release` when
+they are present, and falls back to debug binaries only for local development.

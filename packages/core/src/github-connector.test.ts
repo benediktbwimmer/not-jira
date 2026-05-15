@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
-  githubConnectorAuthModel,
   getGitHubIssueMappingByExternal,
   getGitHubIssueMappingByTask,
+  githubConnectorAuthModel,
   listGitHubConnections,
   listGitHubIssueMappings,
+  upsertGitHubConnection,
   upsertGitHubIssueMapping,
-  upsertGitHubConnection
 } from "./github-connector.js";
 import { createMemoryStore } from "./memory-store.js";
 import type { ConnectorRepository, HostedSecretRepository } from "./store.js";
-import type { ConnectorConnection, ConnectorCursorRecord, ConnectorExternalMapping, ConnectorSyncRun, HostedSecret } from "./types.js";
+import type {
+  ConnectorConnection,
+  ConnectorCursorRecord,
+  ConnectorExternalMapping,
+  ConnectorSyncRun,
+  HostedSecret,
+} from "./types.js";
 
 describe("GitHub connector auth model", () => {
   it("uses GitHub App installation auth with narrow repository permissions", () => {
@@ -18,9 +24,9 @@ describe("GitHub connector auth model", () => {
       mode: "github_app_installation",
       repositoryPermissions: {
         metadata: "read",
-        issues: "write"
+        issues: "write",
       },
-      subscribeEvents: ["issues", "issue_comment"]
+      subscribeEvents: ["issues", "issue_comment"],
     });
   });
 
@@ -29,7 +35,7 @@ describe("GitHub connector auth model", () => {
     store.connectors = new FakeConnectors();
     store.hostedSecrets = new FakeSecrets([
       secret("private-key", "github.private_key"),
-      secret("webhook-secret", "github.webhook_secret")
+      secret("webhook-secret", "github.webhook_secret"),
     ]);
 
     const connection = await upsertGitHubConnection(store, {
@@ -40,7 +46,7 @@ describe("GitHub connector auth model", () => {
       repositoryOwner: "acme",
       repositoryName: "repo",
       privateKeySecretId: "private-key",
-      webhookSecretId: "webhook-secret"
+      webhookSecretId: "webhook-secret",
     });
 
     expect(connection).toMatchObject({
@@ -50,10 +56,12 @@ describe("GitHub connector auth model", () => {
         installationId: "456",
         repositoryOwner: "acme",
         repositoryName: "repo",
-        conflictPolicy: "operator_review"
-      }
+        conflictPolicy: "operator_review",
+      },
     });
-    await expect(listGitHubConnections(store, "PROJECT")).resolves.toHaveLength(1);
+    await expect(listGitHubConnections(store, "PROJECT")).resolves.toHaveLength(
+      1,
+    );
   });
 
   it("maps GitHub issues to Unblock tasks with conflict policy metadata", async () => {
@@ -70,7 +78,7 @@ describe("GitHub connector auth model", () => {
       taskId: "GH-42",
       externalVersion: "etag-1",
       localVersion: "1",
-      conflictPolicy: "operator_review"
+      conflictPolicy: "operator_review",
     });
 
     expect(mapping).toMatchObject({
@@ -80,15 +88,24 @@ describe("GitHub connector auth model", () => {
       localKind: "task",
       localId: "GH-42",
       conflictPolicy: "operator_review",
-      status: "active"
+      status: "active",
     });
-    await expect(getGitHubIssueMappingByExternal(store, "PROJECT", "github-main", {
-      repositoryOwner: "acme",
-      repositoryName: "repo",
-      issueNumber: 42
-    })).resolves.toMatchObject({ localId: "GH-42" });
-    await expect(getGitHubIssueMappingByTask(store, "PROJECT", "github-main", "GH-42")).resolves.toMatchObject({ externalId: "acme/repo#42" });
-    await expect(listGitHubIssueMappings(store, { projectId: "PROJECT", connectionId: "github-main" })).resolves.toHaveLength(1);
+    await expect(
+      getGitHubIssueMappingByExternal(store, "PROJECT", "github-main", {
+        repositoryOwner: "acme",
+        repositoryName: "repo",
+        issueNumber: 42,
+      }),
+    ).resolves.toMatchObject({ localId: "GH-42" });
+    await expect(
+      getGitHubIssueMappingByTask(store, "PROJECT", "github-main", "GH-42"),
+    ).resolves.toMatchObject({ externalId: "acme/repo#42" });
+    await expect(
+      listGitHubIssueMappings(store, {
+        projectId: "PROJECT",
+        connectionId: "github-main",
+      }),
+    ).resolves.toHaveLength(1);
   });
 
   it("updates GitHub mappings idempotently for conflict review", async () => {
@@ -103,7 +120,7 @@ describe("GitHub connector auth model", () => {
       issueUrl: "https://github.com/acme/repo/issues/42",
       taskId: "GH-42",
       externalVersion: "etag-1",
-      localVersion: "1"
+      localVersion: "1",
     };
 
     const first = await upsertGitHubIssueMapping(store, input);
@@ -111,15 +128,46 @@ describe("GitHub connector auth model", () => {
       ...input,
       externalVersion: "etag-2",
       status: "operator_review",
-      metadata: { reason: "version_conflict" }
+      metadata: { reason: "version_conflict" },
     });
 
     expect(store.connectors.mappings).toHaveLength(1);
     expect(second.createdAt).toBe(first.createdAt);
     expect(second).toMatchObject({
       externalVersion: "etag-2",
+      localVersion: "1",
       status: "operator_review",
-      metadata: { reason: "version_conflict" }
+      metadata: { reason: "version_conflict" },
+    });
+  });
+
+  it("preserves local version when reconciliation refreshes external state", async () => {
+    const store = createMemoryStore() as any;
+    store.connectors = new FakeConnectors();
+    const input = {
+      projectId: "PROJECT",
+      connectionId: "github-main",
+      repositoryOwner: "acme",
+      repositoryName: "repo",
+      issueNumber: 42,
+      issueUrl: "https://github.com/acme/repo/issues/42",
+      taskId: "GH-42",
+      externalVersion: "etag-1",
+      localVersion: "7",
+    };
+
+    await upsertGitHubIssueMapping(store, input);
+    const refreshed = await upsertGitHubIssueMapping(store, {
+      ...input,
+      externalVersion: "etag-2",
+      localVersion: null,
+      metadata: { source: "github-backfill" },
+    });
+
+    expect(refreshed).toMatchObject({
+      externalVersion: "etag-2",
+      localVersion: "7",
+      metadata: { source: "github-backfill" },
     });
   });
 });
@@ -137,7 +185,7 @@ function secret(id: string, purpose: string): HostedSecret {
     createdAt: "2026-05-14T00:00:00.000Z",
     updatedAt: "2026-05-14T00:00:00.000Z",
     rotatedAt: null,
-    archivedAt: null
+    archivedAt: null,
   };
 }
 
@@ -153,11 +201,15 @@ class FakeSecrets implements HostedSecretRepository {
   }
 
   async list(projectId?: string | null | undefined) {
-    return this.secrets.filter((secret) => projectId === undefined || secret.projectId === projectId);
+    return this.secrets.filter((secret) =>
+      projectId === undefined || secret.projectId === projectId
+    );
   }
 
   async findByName(projectId: string | null, name: string) {
-    return this.secrets.find((secret) => secret.projectId === projectId && secret.name === name) ?? null;
+    return this.secrets.find((secret) =>
+      secret.projectId === projectId && secret.name === name
+    ) ?? null;
   }
 
   async update(secret: HostedSecret) {
@@ -178,17 +230,23 @@ class FakeConnectors implements ConnectorRepository {
   mappings: ConnectorExternalMapping[] = [];
 
   async upsertConnection(connection: ConnectorConnection) {
-    const index = this.connections.findIndex((item) => item.projectId === connection.projectId && item.id === connection.id);
+    const index = this.connections.findIndex((item) =>
+      item.projectId === connection.projectId && item.id === connection.id
+    );
     if (index >= 0) this.connections[index] = connection;
     else this.connections.push(connection);
   }
 
   async getConnection(projectId: string, id: string) {
-    return this.connections.find((connection) => connection.projectId === projectId && connection.id === id) ?? null;
+    return this.connections.find((connection) =>
+      connection.projectId === projectId && connection.id === id
+    ) ?? null;
   }
 
   async listConnections(projectId?: string) {
-    return this.connections.filter((connection) => !projectId || connection.projectId === projectId);
+    return this.connections.filter((connection) =>
+      !projectId || connection.projectId === projectId
+    );
   }
 
   async upsertCursor(cursor: ConnectorCursorRecord) {
@@ -196,7 +254,9 @@ class FakeConnectors implements ConnectorRepository {
   }
 
   async listCursors(projectId: string, connectionId: string) {
-    return this.cursors.filter((cursor) => cursor.projectId === projectId && cursor.connectionId === connectionId);
+    return this.cursors.filter((cursor) =>
+      cursor.projectId === projectId && cursor.connectionId === connectionId
+    );
   }
 
   async recordSyncRun(run: ConnectorSyncRun) {
@@ -213,39 +273,62 @@ class FakeConnectors implements ConnectorRepository {
 
   async upsertMapping(mapping: ConnectorExternalMapping) {
     const index = this.mappings.findIndex((item) =>
-      item.projectId === mapping.projectId
-        && item.connectionId === mapping.connectionId
-        && item.externalKind === mapping.externalKind
-        && item.externalId === mapping.externalId
+      item.projectId === mapping.projectId &&
+      item.connectionId === mapping.connectionId &&
+      item.externalKind === mapping.externalKind &&
+      item.externalId === mapping.externalId
     );
     if (index >= 0) this.mappings[index] = mapping;
     else this.mappings.push(mapping);
   }
 
-  async getMappingByExternal(projectId: string, connectionId: string, externalKind: string, externalId: string) {
+  async getMappingByExternal(
+    projectId: string,
+    connectionId: string,
+    externalKind: string,
+    externalId: string,
+  ) {
     return this.mappings.find((mapping) =>
-      mapping.projectId === projectId
-        && mapping.connectionId === connectionId
-        && mapping.externalKind === externalKind
-        && mapping.externalId === externalId
+      mapping.projectId === projectId &&
+      mapping.connectionId === connectionId &&
+      mapping.externalKind === externalKind &&
+      mapping.externalId === externalId
     ) ?? null;
   }
 
-  async getMappingByLocal(projectId: string, connectionId: string, localKind: string, localId: string) {
+  async getMappingByLocal(
+    projectId: string,
+    connectionId: string,
+    localKind: string,
+    localId: string,
+  ) {
     return this.mappings.find((mapping) =>
-      mapping.projectId === projectId
-        && mapping.connectionId === connectionId
-        && mapping.localKind === localKind
-        && mapping.localId === localId
-        && !mapping.archivedAt
+      mapping.projectId === projectId &&
+      mapping.connectionId === connectionId &&
+      mapping.localKind === localKind &&
+      mapping.localId === localId &&
+      !mapping.archivedAt
     ) ?? null;
   }
 
-  async listMappings(options: { projectId?: string | undefined; connectionId?: string | undefined; provider?: string | undefined; limit?: number | undefined }) {
+  async listMappings(
+    options: {
+      projectId?: string | undefined;
+      connectionId?: string | undefined;
+      provider?: string | undefined;
+      limit?: number | undefined;
+    },
+  ) {
     return this.mappings
-      .filter((mapping) => !options.projectId || mapping.projectId === options.projectId)
-      .filter((mapping) => !options.connectionId || mapping.connectionId === options.connectionId)
-      .filter((mapping) => !options.provider || mapping.provider === options.provider)
+      .filter((mapping) =>
+        !options.projectId || mapping.projectId === options.projectId
+      )
+      .filter((mapping) =>
+        !options.connectionId || mapping.connectionId === options.connectionId
+      )
+      .filter((mapping) =>
+        !options.provider || mapping.provider === options.provider
+      )
       .slice(0, options.limit ?? 100);
   }
 }

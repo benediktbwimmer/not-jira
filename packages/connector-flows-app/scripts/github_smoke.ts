@@ -827,7 +827,6 @@ async function startPrismFlow(env: Env, endpoint: string, input: {
   try {
     return await client.startFlow({
       projectId: input.prismProjectId,
-      shardId: `tenant:${input.tenantId}:project:${input.projectId}`,
       appId: "flows",
       flowId: input.flowId,
       workflowId: input.flowId,
