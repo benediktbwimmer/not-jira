@@ -24,6 +24,7 @@ import {
   readUnblockConfig,
   readUnblockConfigSync,
   resolveUnblockStorageConfig,
+  runConnectorWorkloadBenchmark,
   runMatcherReadBenchmark,
   runStorageCrudBenchmark,
   slugify,
@@ -284,10 +285,69 @@ bench.command("matcher")
     }
   });
 
+bench.command("connector")
+  .description("Run connector workload benchmarks against durable connector, inbox, outbox, and sync queue repositories")
+  .option("--project-id <id>", "project id to create for this benchmark")
+  .option("--tenant-id <id>", "tenant id used for synthetic connector events", "benchmark-tenant")
+  .option("--connection-id <id>", "connector connection id", "github-main")
+  .option("--tasks <count>", "tasks to seed", parseInteger)
+  .option("--mappings <count>", "external mappings to upsert", parseInteger)
+  .option("--policies <count>", "sync policies to upsert", parseInteger)
+  .option("--inbound-events <count>", "inbox events to receive and apply", parseInteger)
+  .option("--outbound-events <count>", "outbox events to enqueue", parseInteger)
+  .option("--retry-events <count>", "outbox events to fail, reclaim, and mark processed", parseInteger)
+  .option("--reconciliation-requests <count>", "reconciliation requests to enqueue", parseInteger)
+  .option("--queue-items <count>", "sync queue items to upsert", parseInteger)
+  .option("--queue-resolutions <count>", "sync queue items to resolve", parseInteger)
+  .option("--reads <count>", "connector read mix iterations", parseInteger)
+  .option("--min-ops-per-second <count>", "fail the command if total connector throughput is below this", parseFloatOption)
+  .action(async (options: {
+    projectId?: string;
+    tenantId?: string;
+    connectionId?: string;
+    tasks?: number;
+    mappings?: number;
+    policies?: number;
+    inboundEvents?: number;
+    outboundEvents?: number;
+    retryEvents?: number;
+    reconciliationRequests?: number;
+    queueItems?: number;
+    queueResolutions?: number;
+    reads?: number;
+    minOpsPerSecond?: number;
+  }) => {
+    const store = await openStore();
+    try {
+      const report = await runConnectorWorkloadBenchmark(store, {
+        projectId: options.projectId,
+        tenantId: options.tenantId,
+        connectionId: options.connectionId,
+        machine: "connector-benchmark",
+        actor: program.opts<GlobalOptions>().actor ?? "connector-benchmark",
+        tasks: options.tasks,
+        mappings: options.mappings,
+        policies: options.policies,
+        inboundEvents: options.inboundEvents,
+        outboundEvents: options.outboundEvents,
+        retryEvents: options.retryEvents,
+        reconciliationRequests: options.reconciliationRequests,
+        queueItems: options.queueItems,
+        queueResolutions: options.queueResolutions,
+        reads: options.reads,
+        minOpsPerSecond: options.minOpsPerSecond
+      });
+      print(report, format());
+      if (!report.ok) process.exitCode = 1;
+    } finally {
+      await store.close?.();
+    }
+  });
+
 bench.command("matrix")
   .description("Run the benchmark fixture matrix across SQLite, Postgres, and hosted Postgres modes")
   .option("--modes <list>", "comma-separated modes: sqlite,postgres,hosted", "sqlite,postgres,hosted")
-  .option("--scenarios <list>", "comma-separated scenarios: storage,matcher", "storage,matcher")
+  .option("--scenarios <list>", "comma-separated scenarios: storage,matcher,connector", "storage,matcher")
   .option("--project-prefix <id>", "project id prefix for seeded benchmark projects", "BENCH")
   .option("--run-id <id>", "stable run id; defaults to the current timestamp")
   .option("--sqlite-path <path>", "SQLite database path; defaults to a temporary database")
@@ -301,8 +361,13 @@ bench.command("matrix")
   .option("--read-tasks <count>", "matcher scenario task count", parseInteger)
   .option("--iterations <count>", "matcher scenario read iterations", parseInteger)
   .option("--pollers <count>", "matcher scenario concurrent frontend pollers", parseInteger)
+  .option("--connector-tasks <count>", "connector scenario task count", parseInteger)
+  .option("--connector-events <count>", "connector scenario inbound/outbound event count", parseInteger)
+  .option("--connector-queue-items <count>", "connector scenario sync queue item count", parseInteger)
+  .option("--connector-reads <count>", "connector scenario read mix iterations", parseInteger)
   .option("--min-storage-ops-per-second <count>", "fail storage scenarios below this throughput", parseFloatOption)
   .option("--min-read-ops-per-second <count>", "fail matcher scenarios below this throughput", parseFloatOption)
+  .option("--min-connector-ops-per-second <count>", "fail connector scenarios below this throughput", parseFloatOption)
   .option("--keep-sqlite", "keep the temporary SQLite database after the run")
   .action(async (options: {
     modes: string;
@@ -320,8 +385,13 @@ bench.command("matrix")
     readTasks?: number;
     iterations?: number;
     pollers?: number;
+    connectorTasks?: number;
+    connectorEvents?: number;
+    connectorQueueItems?: number;
+    connectorReads?: number;
     minStorageOpsPerSecond?: number;
     minReadOpsPerSecond?: number;
+    minConnectorOpsPerSecond?: number;
     keepSqlite?: boolean;
   }) => {
     const report = await runBenchmarkMatrix(options);
@@ -1280,7 +1350,7 @@ async function openStore() {
 }
 
 type BenchmarkMatrixMode = "sqlite" | "postgres" | "hosted";
-type BenchmarkMatrixScenario = "storage" | "matcher";
+type BenchmarkMatrixScenario = "storage" | "matcher" | "connector";
 
 interface BenchmarkMatrixCommandOptions {
   modes: string;
@@ -1298,8 +1368,13 @@ interface BenchmarkMatrixCommandOptions {
   readTasks?: number | undefined;
   iterations?: number | undefined;
   pollers?: number | undefined;
+  connectorTasks?: number | undefined;
+  connectorEvents?: number | undefined;
+  connectorQueueItems?: number | undefined;
+  connectorReads?: number | undefined;
   minStorageOpsPerSecond?: number | undefined;
   minReadOpsPerSecond?: number | undefined;
+  minConnectorOpsPerSecond?: number | undefined;
   keepSqlite?: boolean | undefined;
 }
 
@@ -1323,7 +1398,7 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
   cases: BenchmarkMatrixCaseReport[];
 }> {
   const modes = parseBenchmarkMatrixList(options.modes, ["sqlite", "postgres", "hosted"] as const, "mode");
-  const scenarios = parseBenchmarkMatrixList(options.scenarios, ["storage", "matcher"] as const, "scenario");
+  const scenarios = parseBenchmarkMatrixList(options.scenarios, ["storage", "matcher", "connector"] as const, "scenario");
   const runId = normalizeBenchmarkRunId(options.runId ?? new Date().toISOString().replace(/[:.]/g, "-"));
   const projectPrefix = normalizeBenchmarkRunId(options.projectPrefix || "BENCH");
   const cases: BenchmarkMatrixCaseReport[] = [];
@@ -1333,6 +1408,16 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
     for (const mode of modes) {
       for (const scenario of scenarios) {
         const projectId = `${projectPrefix}-${runId}-${mode}-${scenario}`.toUpperCase();
+        if (scenario === "connector" && mode === "sqlite") {
+          cases.push({
+            mode,
+            scenario,
+            projectId,
+            skipped: true,
+            skipReason: "SQLite local mode does not expose durable connector, inbox, outbox, or sync queue repositories."
+          });
+          continue;
+        }
         const prepared = await prepareBenchmarkStore(mode, options, temporaryDirectories);
         if (prepared.skipped) {
           cases.push({
@@ -1358,7 +1443,8 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
               audit: options.audit,
               minOpsPerSecond: options.minStorageOpsPerSecond
             })
-            : await runMatcherReadBenchmark(store, {
+            : scenario === "matcher"
+            ? await runMatcherReadBenchmark(store, {
               projectId,
               machine: `${mode}-benchmark`,
               actor: "benchmark-matrix",
@@ -1366,6 +1452,20 @@ async function runBenchmarkMatrix(options: BenchmarkMatrixCommandOptions): Promi
               iterations: options.iterations,
               pollers: options.pollers,
               minOpsPerSecond: options.minReadOpsPerSecond
+            })
+            : await runConnectorWorkloadBenchmark(store, {
+              projectId,
+              tenantId: mode === "hosted" ? prepared.tenantId : "benchmark-tenant",
+              connectionId: "github-main",
+              machine: `${mode}-benchmark`,
+              actor: "benchmark-matrix",
+              tasks: options.connectorTasks,
+              mappings: options.connectorTasks,
+              inboundEvents: options.connectorEvents,
+              outboundEvents: options.connectorEvents,
+              queueItems: options.connectorQueueItems,
+              reads: options.connectorReads,
+              minOpsPerSecond: options.minConnectorOpsPerSecond
             });
           cases.push({
             mode,

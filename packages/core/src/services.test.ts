@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createMemoryStore, createServices, ensureUnblockConfig, UnblockError, readUnblockConfig, runMatcherReadBenchmark, runStorageCrudBenchmark } from "./index.js";
+import { createMemoryStore, createServices, ensureUnblockConfig, UnblockError, readUnblockConfig, runConnectorWorkloadBenchmark, runMatcherReadBenchmark, runStorageCrudBenchmark } from "./index.js";
 import type { AppStore } from "./store.js";
 
 describe("unblock core services", () => {
@@ -498,6 +498,18 @@ describe("unblock core services", () => {
       "activity.append"
     ]));
     expect(report.totals.operations).toBeGreaterThan(0);
+  });
+
+  it("reports unsupported connector benchmark stores clearly", async () => {
+    const report = await runConnectorWorkloadBenchmark(createMemoryStore(), {
+      projectId: "CONNECTOR-BENCH-TEST",
+      tasks: 2
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.supported).toBe(false);
+    expect(report.unsupportedReason).toContain("connector repositories");
+    expect(report.totals.operations).toBe(0);
   });
 
   it("uses the matcher language to filter activity by attached task", async () => {
