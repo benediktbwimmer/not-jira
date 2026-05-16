@@ -4,9 +4,11 @@ import {
   createConnectorSyncPolicyRecord,
   connectorSyncPolicyPreset,
   decideConnectorFieldSync,
+  decideResolvedConnectorFieldSync,
   listConnectorSyncPolicies,
   listConnectorSyncQueueItems,
   mergeConnectorSyncPolicies,
+  resolveConnectorSyncPolicy,
   updateConnectorSyncQueueItemStatus,
   upsertConnectorSyncPolicy,
 } from "./connector-sync.js";
@@ -98,6 +100,135 @@ describe("connector sync policy", () => {
     });
 
     expect(decision).toMatchObject({ kind: "manual_review" });
+  });
+
+  it("resolves global and matcher-scoped policies with explanations", () => {
+    const base = connectorSyncPolicyPreset("jira", "execution_layer");
+    const global = createConnectorSyncPolicyRecord({
+      projectId: "PROJECT",
+      id: "jira-default",
+      connectionId: "jira-main",
+      name: "Jira default",
+      priority: 0,
+      policy: {
+        ...base,
+        fields: {
+          external_state: {
+            field: "external_state",
+            mode: "manual",
+            conflictPolicy: "manual_review",
+          },
+        },
+      },
+    }, "2026-05-16T00:00:00.000Z");
+    const scoped = createConnectorSyncPolicyRecord({
+      projectId: "PROJECT",
+      id: "security-owned",
+      connectionId: "jira-main",
+      name: "Security queue owns labels",
+      scopeQuery: "tag = security",
+      priority: 10,
+      policy: {
+        ...base,
+        fields: {
+          labels: {
+            field: "labels",
+            mode: "unblock_owned",
+          },
+        },
+      },
+    }, "2026-05-16T00:00:01.000Z");
+    const unmatched = createConnectorSyncPolicyRecord({
+      projectId: "PROJECT",
+      id: "backend-owned",
+      connectionId: "jira-main",
+      name: "Backend queue owns labels",
+      scopeQuery: "tag = backend",
+      priority: 20,
+      policy: {
+        ...base,
+        fields: {
+          labels: {
+            field: "labels",
+            mode: "manual",
+          },
+        },
+      },
+    }, "2026-05-16T00:00:02.000Z");
+
+    const resolution = resolveConnectorSyncPolicy({
+      provider: "jira",
+      objectKind: "issue",
+      defaultPolicy: base,
+      policies: [unmatched, scoped, global],
+      task: taskView("TASK-1", ["security"]),
+      tasks: [taskView("TASK-1", ["security"])],
+      dependencies: [],
+    });
+
+    expect(resolution.policy.fields.external_state).toMatchObject({
+      mode: "manual",
+    });
+    expect(resolution.policy.fields.labels).toMatchObject({
+      mode: "unblock_owned",
+    });
+    expect(resolution.fieldSources.labels?.id).toBe("security-owned");
+    expect(resolution.appliedPolicies.map((policy) => policy.id)).toEqual([
+      null,
+      "jira-default",
+      "security-owned",
+    ]);
+    expect(resolution.skippedPolicies).toEqual([
+      expect.objectContaining({
+        id: "backend-owned",
+        skipReason: "scope_not_matched",
+      }),
+    ]);
+    expect(resolution.explanation.join("\n")).toContain("Applied Security queue owns labels");
+  });
+
+  it("attaches resolved policy source evidence to field decisions", () => {
+    const base = connectorSyncPolicyPreset("github", "execution_layer");
+    const scoped = createConnectorSyncPolicyRecord({
+      projectId: "PROJECT",
+      id: "manual-title",
+      connectionId: "github-main",
+      name: "Manual titles",
+      scopeQuery: "tag = needs-review",
+      priority: 10,
+      policy: {
+        ...base,
+        fields: {
+          title: {
+            field: "title",
+            mode: "manual",
+          },
+        },
+      },
+    });
+    const task = taskView("GH-1", ["needs-review"]);
+    const resolution = resolveConnectorSyncPolicy({
+      provider: "github",
+      defaultPolicy: base,
+      policies: [scoped],
+      task,
+      tasks: [task],
+      dependencies: [],
+    });
+
+    const decision = decideResolvedConnectorFieldSync({
+      resolution,
+      diff: {
+        field: "title",
+        externalValue: "External title",
+        localValue: "Local title",
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "manual_review",
+      reason: expect.stringContaining("Policy source: Manual titles"),
+    });
   });
 });
 
@@ -283,4 +414,68 @@ class FakeConnectors {
     item.resolvedAt = options.resolvedAt ?? null;
     return item;
   }
+}
+
+function taskView(id: string, tagNames: string[]) {
+  return {
+    projectId: "PROJECT",
+    id,
+    parentTaskId: null,
+    title: id,
+    description: "",
+    lifecycle: "open",
+    priority: 2,
+    size: null,
+    sourceDoc: null,
+    sourceSection: null,
+    sourceAnchor: null,
+    sourceLine: null,
+    sourceText: null,
+    completionBar: null,
+    createdAt: "2026-05-16T00:00:00.000Z",
+    updatedAt: "2026-05-16T00:00:00.000Z",
+    startedAt: null,
+    finishedAt: null,
+    archivedAt: null,
+    version: 1,
+    computedStatus: "ready",
+    ready: true,
+    blocked: false,
+    unfinishedDependenciesCount: 0,
+    finishedDependenciesCount: 0,
+    dependencyDepth: 0,
+    dependentsCount: 0,
+    transitiveDependentsCount: 0,
+    parent: null,
+    childrenCount: 0,
+    descendantsCount: 0,
+    leafDescendantsCount: 0,
+    finishedLeafDescendantsCount: 0,
+    subtreeProgress: 0,
+    subtreeOpenCount: 0,
+    subtreeReadyCount: 0,
+    subtreeBlockedCount: 0,
+    subtreeStartedCount: 0,
+    subtreeFinishedCount: 0,
+    hierarchyDepth: 0,
+    rollupStatus: "leaf",
+    unfinishedDescendantsCount: 0,
+    criticalChildPath: [],
+    assignedTrack: null,
+    tags: tagNames.map((name) => ({
+      projectId: "PROJECT",
+      id: name.toUpperCase(),
+      name,
+      color: null,
+      description: null,
+      sortOrder: 0,
+      createdAt: "2026-05-16T00:00:00.000Z",
+      updatedAt: "2026-05-16T00:00:00.000Z",
+      archivedAt: null,
+    })),
+    commentCount: 0,
+    recentCommentCount: 0,
+    lastCommentAt: null,
+    commentAuthors: [],
+  } as any;
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { validation } from "./errors.js";
+import { matchMatcherQuery } from "./matcher-query.js";
 import type { AppStore, ConnectorRepository } from "./store.js";
 import {
   nowIso,
@@ -15,6 +16,8 @@ import {
   type ConnectorSyncPreset,
   type ConnectorSyncQueueItem,
   type ConnectorSyncQueueItemStatus,
+  type Dependency,
+  type TaskView,
 } from "./types.js";
 
 export const connectorSyncPresetSchema = z.enum([
@@ -96,6 +99,48 @@ export interface ConnectorSyncDecisionInput {
   localSnapshot?: Record<string, unknown> | undefined;
   mapping?: ConnectorExternalMapping | null | undefined;
   now?: string | undefined;
+}
+
+export type ConnectorSyncPolicyResolutionSkipReason =
+  | "disabled"
+  | "archived"
+  | "provider_mismatch"
+  | "object_kind_mismatch"
+  | "scope_not_evaluated"
+  | "scope_not_matched";
+
+export interface ConnectorSyncPolicyResolutionRef {
+  id: string | null;
+  name: string;
+  scopeQuery: string | null;
+  priority: number;
+  fields: string[];
+  reason: string;
+}
+
+export interface ConnectorSyncPolicyResolutionSkippedRef
+  extends ConnectorSyncPolicyResolutionRef {
+  skipReason: ConnectorSyncPolicyResolutionSkipReason;
+}
+
+export interface ConnectorSyncPolicyResolution {
+  policy: ConnectorSyncPolicy;
+  basePolicy: ConnectorSyncPolicy;
+  appliedPolicies: ConnectorSyncPolicyResolutionRef[];
+  skippedPolicies: ConnectorSyncPolicyResolutionSkippedRef[];
+  fieldSources: Record<string, ConnectorSyncPolicyResolutionRef>;
+  explanation: string[];
+}
+
+export interface ConnectorSyncPolicyResolutionInput {
+  provider: string;
+  objectKind?: string | undefined;
+  preset?: ConnectorSyncPreset | undefined;
+  defaultPolicy?: ConnectorSyncPolicy | undefined;
+  policies?: ConnectorSyncPolicyRecord[] | undefined;
+  task?: TaskView | undefined;
+  tasks?: TaskView[] | undefined;
+  dependencies?: Dependency[] | undefined;
 }
 
 export function createConnectorSyncPolicyRecord(
@@ -267,6 +312,90 @@ export function mergeConnectorSyncPolicies(
   });
 }
 
+export function resolveConnectorSyncPolicy(
+  input: ConnectorSyncPolicyResolutionInput,
+): ConnectorSyncPolicyResolution {
+  const objectKind = input.objectKind ?? input.defaultPolicy?.objectKind ?? "issue";
+  const basePolicy = connectorSyncPolicySchema.parse(
+    input.defaultPolicy ?? connectorSyncPolicyPreset(input.provider, input.preset ?? "execution_layer", objectKind),
+  );
+  const activePolicies = [...(input.policies ?? [])].sort(comparePolicyRecordForApplication);
+  const appliedPolicies: ConnectorSyncPolicyResolutionRef[] = [{
+    id: null,
+    name: `${basePolicy.provider}:${basePolicy.preset}`,
+    scopeQuery: null,
+    priority: Number.NEGATIVE_INFINITY,
+    fields: Object.keys(basePolicy.fields).sort(),
+    reason: "Default connector preset.",
+  }];
+  const skippedPolicies: ConnectorSyncPolicyResolutionSkippedRef[] = [];
+  const fieldSources: Record<string, ConnectorSyncPolicyResolutionRef> = {};
+  for (const fieldName of Object.keys(basePolicy.fields)) {
+    fieldSources[fieldName] = appliedPolicies[0]!;
+  }
+  let policy = basePolicy;
+
+  for (const record of activePolicies) {
+    const ref = policyResolutionRef(record);
+    const skipReason = skipPolicyResolution(record, basePolicy, input);
+    if (skipReason) {
+      skippedPolicies.push({
+        ...ref,
+        skipReason,
+        reason: policySkipReasonText(skipReason),
+      });
+      continue;
+    }
+    const appliedRef = {
+      ...ref,
+      reason: record.scopeQuery
+        ? `Matcher scope matched: ${record.scopeQuery}`
+        : "Connector-level default policy.",
+    };
+    policy = mergeConnectorSyncPolicies(policy, record.policy);
+    appliedPolicies.push(appliedRef);
+    for (const fieldName of ref.fields) {
+      fieldSources[fieldName] = appliedRef;
+    }
+  }
+
+  return {
+    policy,
+    basePolicy,
+    appliedPolicies,
+    skippedPolicies,
+    fieldSources,
+    explanation: [
+      `Started from ${basePolicy.provider} ${basePolicy.preset} ${basePolicy.objectKind} policy.`,
+      ...appliedPolicies.slice(1).map((item) =>
+        `Applied ${item.name} (${item.id ?? "default"})${item.scopeQuery ? ` for ${item.scopeQuery}` : ""}.`
+      ),
+      ...skippedPolicies.map((item) =>
+        `Skipped ${item.name} (${item.id ?? "default"}): ${item.reason}`
+      ),
+    ],
+  };
+}
+
+export function decideResolvedConnectorFieldSync(
+  input: Omit<ConnectorSyncDecisionInput, "policy"> & {
+    resolution: ConnectorSyncPolicyResolution;
+  },
+): ConnectorSyncDecision {
+  const decisionValue = decideConnectorFieldSync({
+    diff: input.diff,
+    policy: input.resolution.policy,
+  });
+  const source = input.resolution.fieldSources[input.diff.field];
+  if (!source) {
+    return decisionValue;
+  }
+  return {
+    ...decisionValue,
+    reason: `${decisionValue.reason} Policy source: ${source.name}${source.scopeQuery ? ` (${source.scopeQuery})` : ""}.`,
+  };
+}
+
 export function connectorFieldPolicy(
   policy: ConnectorSyncPolicy,
   fieldName: string,
@@ -356,6 +485,65 @@ function decideBidirectional(
       return decision("blocked", diff, policy, "Policy blocks automatic bidirectional conflict resolution.", "high");
     case "manual_review":
       return decision("manual_review", diff, policy, "Bidirectional divergence needs manual review.", "high");
+  }
+}
+
+function comparePolicyRecordForApplication(
+  left: ConnectorSyncPolicyRecord,
+  right: ConnectorSyncPolicyRecord,
+): number {
+  return left.priority - right.priority ||
+    left.updatedAt.localeCompare(right.updatedAt) ||
+    left.id.localeCompare(right.id);
+}
+
+function policyResolutionRef(
+  record: ConnectorSyncPolicyRecord,
+): ConnectorSyncPolicyResolutionRef {
+  return {
+    id: record.id,
+    name: record.name,
+    scopeQuery: record.scopeQuery,
+    priority: record.priority,
+    fields: Object.keys(record.policy.fields).sort(),
+    reason: "",
+  };
+}
+
+function skipPolicyResolution(
+  record: ConnectorSyncPolicyRecord,
+  basePolicy: ConnectorSyncPolicy,
+  input: ConnectorSyncPolicyResolutionInput,
+): ConnectorSyncPolicyResolutionSkipReason | null {
+  if (!record.enabled) return "disabled";
+  if (record.archivedAt) return "archived";
+  if (record.policy.provider !== basePolicy.provider) return "provider_mismatch";
+  if (record.policy.objectKind !== basePolicy.objectKind) return "object_kind_mismatch";
+  if (!record.scopeQuery) return null;
+  if (!input.task || !input.tasks || !input.dependencies) {
+    return "scope_not_evaluated";
+  }
+  const matches = matchMatcherQuery(record.scopeQuery, input.tasks, input.dependencies)
+    .some((match) => match.task.id === input.task?.id);
+  return matches ? null : "scope_not_matched";
+}
+
+function policySkipReasonText(
+  reason: ConnectorSyncPolicyResolutionSkipReason,
+): string {
+  switch (reason) {
+    case "disabled":
+      return "policy is disabled";
+    case "archived":
+      return "policy is archived";
+    case "provider_mismatch":
+      return "provider does not match the connector";
+    case "object_kind_mismatch":
+      return "object kind does not match the connector object";
+    case "scope_not_evaluated":
+      return "matcher scope needs task and dependency context";
+    case "scope_not_matched":
+      return "matcher scope did not match the local task";
   }
 }
 
