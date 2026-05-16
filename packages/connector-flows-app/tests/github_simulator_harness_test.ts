@@ -56,6 +56,19 @@ Deno.test("GitHub simulator harness parses benchmark options", () => {
   if (options.timeoutMs !== 45000) throw new Error("timeout parse failed");
 });
 
+Deno.test("GitHub simulator harness parses space-separated benchmark flags", () => {
+  const options = parseHarnessOptions([
+    "--mode",
+    "benchmark-webhook",
+    "--issues",
+    "250",
+  ], {});
+  if (options.mode !== "benchmark-webhook") {
+    throw new Error("mode parse failed");
+  }
+  if (options.issueCount !== 250) throw new Error("issue count parse failed");
+});
+
 Deno.test("GitHub simulator harness accepts shared Postgres URL for Unblock and Prism", () => {
   const missing = missingHarnessEnv({
     UNBLOCK_E2E_POSTGRES_URL: "postgres://localhost/unblock_sim",

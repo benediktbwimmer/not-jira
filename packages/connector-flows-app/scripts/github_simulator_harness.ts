@@ -41,12 +41,30 @@ export interface HarnessResult {
     issueCount: number;
     elapsedMs: number;
     throughputPerSecond: number;
+    diagnosticsMs?: number;
     taskCount: number;
     taskCreatedSpanMs?: number | null;
     inboxEventCount?: number;
     inboxEventsWithMapping?: number;
     connectorMappingCount?: number;
     hostedAuditCount?: number;
+    prismWorkflowCount?: number;
+    prismWorkflowCompletedCount?: number;
+    prismWorkflowStartSpanMs?: number | null;
+    prismWorkflowRuntimeSpanMs?: number | null;
+    prismWorkflowShardCount?: number;
+    prismWorkflowStatusCounts?: Record<string, number>;
+    prismEffectCount?: number;
+    prismEffectCompletedCount?: number;
+    prismEffectSpanMs?: number | null;
+    prismEffectQueueP50Ms?: number | null;
+    prismEffectQueueP95Ms?: number | null;
+    prismEffectRunP50Ms?: number | null;
+    prismEffectRunP95Ms?: number | null;
+    prismEffectTotalP50Ms?: number | null;
+    prismEffectTotalP95Ms?: number | null;
+    prismEffectStatusCounts?: Record<string, number>;
+    prismEffectKindCounts?: Record<string, number>;
     webhookDeliveries?: {
       total: number;
       ok: number;
@@ -169,6 +187,7 @@ export async function runGithubSimulatorHarness(
     },
   });
   let unblock: ManagedProcess | undefined;
+  let prismStopped = false;
 
   const originalEnv = snapshotEnv([
     "UNBLOCK_HOSTED_API_URL",
@@ -314,6 +333,7 @@ export async function runGithubSimulatorHarness(
       UNBLOCK_HOSTED_API_URL: unblockUrl,
       UNBLOCK_HOSTED_AUTH_MODE: "trusted-headers",
       UNBLOCK_E2E_POSTGRES_URL: postgresUrlForUnblock(env)!,
+      PRISM_POSTGRES_URL: postgresUrlForPrism(env)!,
       UNBLOCK_TRUSTED_PRINCIPAL_ID: "codex-e",
       UNBLOCK_TRUSTED_ORGANIZATION_ID: options.tenantId,
       UNBLOCK_TRUSTED_ROLES: "owner",
@@ -365,9 +385,29 @@ export async function runGithubSimulatorHarness(
         timeoutMs: options.timeoutMs,
         issueCreateConcurrency: options.issueCreateConcurrency,
       });
-    return { ok: true, mode: options.mode, steps, benchmark };
+    await timed(steps, "prism.stop.before_diagnostics", async () => {
+      await stopLocalPrismFlowsRuntime({ outDir: runtimeDir });
+      prismStopped = true;
+    });
+    const diagnosticsStarted = performance.now();
+    const diagnostics = await collectBenchmarkDiagnostics(smokeEnv).catch(() =>
+      undefined
+    );
+    const enrichedBenchmark = {
+      ...benchmark,
+      diagnosticsMs: Math.round(performance.now() - diagnosticsStarted),
+      ...diagnostics,
+    };
+    return {
+      ok: true,
+      mode: options.mode,
+      steps,
+      benchmark: enrichedBenchmark,
+    };
   } finally {
-    await stopLocalPrismFlowsRuntime({ outDir: runtimeDir }).catch(() => {});
+    if (!prismStopped) {
+      await stopLocalPrismFlowsRuntime({ outDir: runtimeDir }).catch(() => {});
+    }
     await unblock?.stop();
     await simulator.close();
     restoreEnv(originalEnv);
@@ -415,16 +455,12 @@ async function runReconcileBenchmark(input: {
     "unblock.tasks.wait",
     () => waitForTaskCount(input.env, input.issueCount, input.timeoutMs),
   );
-  const diagnostics = await collectBenchmarkDiagnostics(input.env).catch(() =>
-    undefined
-  );
   const elapsedMs = Math.round(performance.now() - started);
   return {
     issueCount: input.issueCount,
     elapsedMs,
     throughputPerSecond: perSecond(taskCount, elapsedMs),
     taskCount,
-    ...diagnostics,
   };
 }
 
@@ -513,16 +549,12 @@ async function runWebhookBenchmark(input: {
     "unblock.tasks.wait",
     () => waitForTaskCount(input.env, input.issueCount, input.timeoutMs),
   );
-  const diagnostics = await collectBenchmarkDiagnostics(input.env).catch(() =>
-    undefined
-  );
   const elapsedMs = Math.round(performance.now() - started);
   return {
     issueCount: input.issueCount,
     elapsedMs,
     throughputPerSecond: perSecond(taskCount, elapsedMs),
     taskCount,
-    ...diagnostics,
     webhookDeliveries,
   };
 }
@@ -704,9 +736,23 @@ async function waitForTaskCountHttp(
 
 async function collectBenchmarkDiagnostics(env: Env) {
   const postgresUrl = postgresUrlForUnblock(env);
-  if (!postgresUrl) return undefined;
-  const projectId = required(env, "UNBLOCK_PROJECT_ID");
-  const projectLiteral = sqlLiteral(projectId);
+  const unblock = postgresUrl
+    ? await collectUnblockBenchmarkDiagnostics(env, postgresUrl)
+    : undefined;
+  const prismUrl = postgresUrlForPrism(env);
+  const prism = prismUrl
+    ? await collectPrismBenchmarkDiagnostics(env, prismUrl).catch(() =>
+      undefined
+    )
+    : undefined;
+  return { ...unblock, ...prism };
+}
+
+async function collectUnblockBenchmarkDiagnostics(
+  env: Env,
+  postgresUrl: string,
+) {
+  const projectLiteral = sqlLiteral(required(env, "UNBLOCK_PROJECT_ID"));
   const rows = await psqlRows(
     postgresUrl,
     `
@@ -734,6 +780,163 @@ async function collectBenchmarkDiagnostics(env: Env) {
     connectorMappingCount: values.get("connector_mapping_count") ?? 0,
     hostedAuditCount: values.get("hosted_audit_count") ?? 0,
   };
+}
+
+async function collectPrismBenchmarkDiagnostics(
+  env: Env,
+  postgresUrl: string,
+) {
+  const projectLiteral = sqlLiteral(required(env, "PRISM_FLOWS_PROJECT_ID"));
+  const rows = await psqlRows(
+    postgresUrl,
+    `
+      with flow_log as (
+        select
+          record_kind,
+          causation_id,
+          correlation_id,
+          payload_schema,
+          occurred_at_ms,
+          shard_group_id
+        from prism_flows_v2_log
+        where project_id = ${projectLiteral}
+          and (
+            (record_kind = 'workflow.state' and correlation_id like 'github-issues-%')
+            or (record_kind like 'effect.%' and causation_id like 'workflow:github-issues-%')
+          )
+      ),
+      workflow_starts as (
+        select workflow_key, min(occurred_at_ms) as started_at_ms
+        from (
+          select correlation_id as workflow_key, occurred_at_ms
+          from flow_log
+          where record_kind = 'workflow.state' and correlation_id like 'github-issues-%'
+          union all
+          select regexp_replace(causation_id, '^workflow:(.*):effect:.*$', '\\1') as workflow_key, occurred_at_ms
+          from flow_log
+          where record_kind = 'effect.intent' and causation_id like 'workflow:github-issues-%:effect:%'
+        ) keyed
+        group by workflow_key
+      ),
+      effect_intents as (
+        select causation_id, payload_schema, occurred_at_ms
+        from flow_log
+        where record_kind = 'effect.intent'
+      ),
+      effect_leases as (
+        select causation_id, occurred_at_ms
+        from flow_log
+        where record_kind = 'effect.lease.granted'
+      ),
+      effect_results as (
+        select causation_id, occurred_at_ms
+        from flow_log
+        where record_kind = 'effect.result'
+      ),
+      completed_workflows as (
+        select distinct regexp_replace(causation_id, '^workflow:(.*):effect:job:1$', '\\1') as workflow_key
+        from effect_results
+        where causation_id like '%:effect:job:1'
+      ),
+      effect_timings as (
+        select
+          intents.causation_id,
+          leases.occurred_at_ms - intents.occurred_at_ms as queue_ms,
+          results.occurred_at_ms - leases.occurred_at_ms as run_ms,
+          results.occurred_at_ms - intents.occurred_at_ms as total_ms
+        from effect_intents intents
+        join effect_leases leases using (causation_id)
+        join effect_results results using (causation_id)
+      )
+      select 'prism_workflow_count', count(*)::text from workflow_starts
+      union all
+      select 'prism_workflow_completed_count', count(*)::text from completed_workflows
+      union all
+      select 'prism_workflow_start_span_ms', coalesce(max(started_at_ms)-min(started_at_ms), 0)::text from workflow_starts
+      union all
+      select 'prism_workflow_runtime_span_ms', coalesce((select max(occurred_at_ms) from effect_results) - (select min(started_at_ms) from workflow_starts), 0)::text
+      union all
+      select 'prism_workflow_shard_count', count(distinct shard_group_id)::text from flow_log
+      union all
+      select 'prism_effect_count', count(*)::text from effect_intents
+      union all
+      select 'prism_effect_completed_count', count(*)::text from effect_results
+      union all
+      select 'prism_effect_span_ms', coalesce(max(occurred_at_ms)-min(occurred_at_ms), 0)::text from flow_log where record_kind like 'effect.%'
+      union all
+      select 'prism_effect_queue_p50_ms', coalesce(round(percentile_cont(0.50) within group (order by queue_ms))::bigint, 0)::text from effect_timings
+      union all
+      select 'prism_effect_queue_p95_ms', coalesce(round(percentile_cont(0.95) within group (order by queue_ms))::bigint, 0)::text from effect_timings
+      union all
+      select 'prism_effect_run_p50_ms', coalesce(round(percentile_cont(0.50) within group (order by run_ms))::bigint, 0)::text from effect_timings
+      union all
+      select 'prism_effect_run_p95_ms', coalesce(round(percentile_cont(0.95) within group (order by run_ms))::bigint, 0)::text from effect_timings
+      union all
+      select 'prism_effect_total_p50_ms', coalesce(round(percentile_cont(0.50) within group (order by total_ms))::bigint, 0)::text from effect_timings
+      union all
+      select 'prism_effect_total_p95_ms', coalesce(round(percentile_cont(0.95) within group (order by total_ms))::bigint, 0)::text from effect_timings
+    `,
+  );
+  const values = new Map(rows.map((row) => {
+    const [key, value] = row.split("|", 2);
+    return [key, Number(value)];
+  }));
+  const workflowCount = values.get("prism_workflow_count") ?? 0;
+  const workflowCompleted = values.get("prism_workflow_completed_count") ?? 0;
+  const effectCount = values.get("prism_effect_count") ?? 0;
+  const effectCompleted = values.get("prism_effect_completed_count") ?? 0;
+  return {
+    prismWorkflowCount: workflowCount,
+    prismWorkflowCompletedCount: workflowCompleted,
+    prismWorkflowStartSpanMs: values.get("prism_workflow_start_span_ms") ??
+      null,
+    prismWorkflowRuntimeSpanMs: values.get("prism_workflow_runtime_span_ms") ??
+      null,
+    prismWorkflowShardCount: values.get("prism_workflow_shard_count") ?? 0,
+    prismWorkflowStatusCounts: countStatusMap(workflowCount, workflowCompleted),
+    prismEffectCount: effectCount,
+    prismEffectCompletedCount: effectCompleted,
+    prismEffectSpanMs: values.get("prism_effect_span_ms") ?? null,
+    prismEffectQueueP50Ms: values.get("prism_effect_queue_p50_ms") ?? null,
+    prismEffectQueueP95Ms: values.get("prism_effect_queue_p95_ms") ?? null,
+    prismEffectRunP50Ms: values.get("prism_effect_run_p50_ms") ?? null,
+    prismEffectRunP95Ms: values.get("prism_effect_run_p95_ms") ?? null,
+    prismEffectTotalP50Ms: values.get("prism_effect_total_p50_ms") ?? null,
+    prismEffectTotalP95Ms: values.get("prism_effect_total_p95_ms") ?? null,
+    prismEffectStatusCounts: countStatusMap(effectCount, effectCompleted),
+    prismEffectKindCounts: await psqlCountMap(
+      postgresUrl,
+      `
+        select replace(payload_schema, 'effect.intent.', ''), count(*)::int
+        from prism_flows_v2_log
+        where project_id = ${projectLiteral}
+          and record_kind = 'effect.intent'
+          and causation_id like 'workflow:github-issues-%'
+        group by payload_schema
+      `,
+    ),
+  };
+}
+
+function countStatusMap(
+  total: number,
+  completed: number,
+): Record<string, number> {
+  return {
+    succeeded: completed,
+    pending: Math.max(0, total - completed),
+  };
+}
+
+async function psqlCountMap(
+  postgresUrl: string,
+  sql: string,
+): Promise<Record<string, number>> {
+  const rows = await psqlRows(postgresUrl, sql);
+  return Object.fromEntries(rows.map((row) => {
+    const [key, value] = row.split("|", 2);
+    return [key, Number(value)];
+  }));
 }
 
 async function psqlInt(
@@ -992,9 +1195,14 @@ function parseRepository(value: string): [string, string] {
 
 function parseFlags(args: string[]): Map<string, string | true> {
   const flags = new Map<string, string | true>();
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
     if (!arg.startsWith("--")) continue;
-    const [key, value] = arg.slice(2).split("=", 2);
+    const [key, inlineValue] = arg.slice(2).split("=", 2);
+    const value = inlineValue ??
+      (args[index + 1] && !args[index + 1].startsWith("--")
+        ? args[++index]
+        : true);
     flags.set(key, value ?? true);
   }
   return flags;
