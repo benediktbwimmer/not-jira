@@ -3,6 +3,10 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import {
   createServices,
+  createDelegationRuleRecord,
+  createExternalIdentityRecord,
+  createPrincipalRecord,
+  createTaskResponsibilityRecord,
   createPostgresPool,
   createPostgresStore,
   createSqliteStore,
@@ -45,8 +49,14 @@ import {
   type AppStore,
   type ConnectorEvent,
   withAdditionalHostedRoles,
+  type DelegationRuleInput,
+  type ExternalIdentityInput,
   type Lifecycle,
+  type PrincipalKind,
+  type PrincipalInput,
   type Priority,
+  type TaskResponsibilityInput,
+  type TaskResponsibilityRole,
   type TaskListFilters,
   type TaskSize,
   type TaskSort,
@@ -200,6 +210,110 @@ export function createApp(options: ServerOptions = {}) {
       projectId: c.req.query("projectId") === undefined ? undefined : projectId,
       limit: parseOptionalInteger(c.req.query("limit")) ?? 100
     }) ?? []);
+  });
+
+  app.get("/api/identity/principals", async (c) => {
+    await requireHosted(c);
+    await authorizeHosted(c, null);
+    const repo = requireResponsibilityRepository(c);
+    return c.json(await repo.listPrincipals({
+      kind: c.req.query("kind") as PrincipalKind | undefined,
+      includeDisabled: c.req.query("includeDisabled") === "true",
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }));
+  });
+
+  app.post("/api/identity/principals", async (c) => {
+    const hosted = await requireHosted(c);
+    await authorizeHosted(c, null);
+    const body = await c.req.json<Omit<PrincipalInput, "tenantId">>();
+    const principal = createPrincipalRecord({
+      ...body,
+      tenantId: hosted.identity.tenantId
+    });
+    await requireResponsibilityRepository(c).upsertPrincipal(principal);
+    return c.json(principal, 201);
+  });
+
+  app.get("/api/identity/external-identities", async (c) => {
+    await requireHosted(c);
+    await authorizeHosted(c, null);
+    const repo = requireResponsibilityRepository(c);
+    const principalId = c.req.query("principalId");
+    return c.json(await repo.listExternalIdentities({
+      connectionId: c.req.query("connectionId")?.trim(),
+      provider: c.req.query("provider")?.trim(),
+      principalId: principalId === undefined ? undefined : principalId.trim() || null,
+      unmappedOnly: c.req.query("unmappedOnly") === "true",
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }));
+  });
+
+  app.post("/api/identity/external-identities", async (c) => {
+    const hosted = await requireHosted(c);
+    await authorizeHosted(c, null);
+    const body = await c.req.json<Omit<ExternalIdentityInput, "tenantId">>();
+    const identity = createExternalIdentityRecord({
+      ...body,
+      tenantId: hosted.identity.tenantId
+    });
+    await requireResponsibilityRepository(c).upsertExternalIdentity(identity);
+    return c.json(identity, 201);
+  });
+
+  app.get("/api/identity/task-responsibilities", async (c) => {
+    await requireHosted(c);
+    const projectId = requireProjectId(c);
+    await authorizeHosted(c, projectId);
+    return c.json(await requireResponsibilityRepository(c).listTaskResponsibilities({
+      projectId,
+      taskId: c.req.query("taskId")?.trim(),
+      principalId: c.req.query("principalId")?.trim(),
+      role: c.req.query("role") as TaskResponsibilityRole | undefined,
+      includeArchived: c.req.query("includeArchived") === "true",
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }));
+  });
+
+  app.post("/api/identity/task-responsibilities", async (c) => {
+    const hosted = await requireHosted(c);
+    const body = await c.req.json<Omit<TaskResponsibilityInput, "tenantId">>();
+    const projectId = typeof body.projectId === "string" ? body.projectId : requireProjectId(c);
+    await authorizeHosted(c, projectId);
+    const responsibility = createTaskResponsibilityRecord({
+      ...body,
+      tenantId: hosted.identity.tenantId,
+      projectId
+    });
+    await requireResponsibilityRepository(c).upsertTaskResponsibility(responsibility);
+    return c.json(responsibility, 201);
+  });
+
+  app.get("/api/identity/delegation-rules", async (c) => {
+    await requireHosted(c);
+    const projectId = requireProjectId(c);
+    await authorizeHosted(c, projectId);
+    return c.json(await requireResponsibilityRepository(c).listDelegationRules({
+      projectId,
+      principalId: c.req.query("principalId")?.trim(),
+      enabledOnly: c.req.query("enabledOnly") === "true",
+      includeArchived: c.req.query("includeArchived") === "true",
+      limit: parseOptionalInteger(c.req.query("limit")) ?? 100
+    }));
+  });
+
+  app.post("/api/identity/delegation-rules", async (c) => {
+    const hosted = await requireHosted(c);
+    const body = await c.req.json<Omit<DelegationRuleInput, "tenantId">>();
+    const projectId = typeof body.projectId === "string" ? body.projectId : requireProjectId(c);
+    await authorizeHosted(c, projectId);
+    const rule = createDelegationRuleRecord({
+      ...body,
+      tenantId: hosted.identity.tenantId,
+      projectId
+    });
+    await requireResponsibilityRepository(c).upsertDelegationRule(rule);
+    return c.json(rule, 201);
   });
 
   app.get("/api/secrets", async (c) => {
@@ -792,6 +906,14 @@ function requireProjectId(c: Context): string {
     throw new UnblockError("validation", "projectId is required for this endpoint.");
   }
   return projectId;
+}
+
+function requireResponsibilityRepository(c: Context) {
+  const repo = c.get("store").responsibilities;
+  if (!repo) {
+    throw new UnblockError("validation", "Responsibility repository is not available.");
+  }
+  return repo;
 }
 
 function redactSecret(secret: HostedSecret) {

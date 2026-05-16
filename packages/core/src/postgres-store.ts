@@ -22,6 +22,7 @@ import type {
   ProjectRepository,
   QueueFeedRepository,
   RepositorySet,
+  ResponsibilityRepository,
   SavedViewRepository,
   TagRepository,
   TaskRepository,
@@ -37,7 +38,9 @@ import type {
   ConnectorSyncQueueItem,
   ConnectorSyncQueueItemStatus,
   ConnectorSyncRun,
+  DelegationRule,
   Dependency,
+  ExternalIdentity,
   HostedAuditEvent,
   HostedIdentity,
   HostedSecret,
@@ -45,11 +48,13 @@ import type {
   Instruction,
   Migration,
   OutboxEvent,
+  Principal,
   Project,
   QueueFeed,
   SavedView,
   Tag,
   Task,
+  TaskResponsibility,
   TaskTag,
   Track,
   TrackAssignment,
@@ -109,6 +114,7 @@ export class PostgresStore implements AppStore {
   readonly hostedIdentity: HostedIdentityRepository;
   readonly hostedAudit: HostedAuditRepository;
   readonly hostedSecrets: HostedSecretRepository;
+  readonly responsibilities: ResponsibilityRepository;
   readonly connectors: ConnectorRepository;
 
   constructor(
@@ -161,6 +167,10 @@ export class PostgresStore implements AppStore {
       this.tenantId,
     );
     this.hostedSecrets = new PostgresHostedSecretRepository(
+      this.queryable,
+      this.tenantId,
+    );
+    this.responsibilities = new PostgresResponsibilityRepository(
       this.queryable,
       this.tenantId,
     );
@@ -590,6 +600,266 @@ class PostgresHostedSecretRepository implements HostedSecretRepository {
       "update hosted_secrets set archived_at = $3, updated_at = $3 where tenant_id = $1 and id = $2",
       [this.tenantId, id, archivedAt],
     );
+  }
+}
+
+class PostgresResponsibilityRepository implements ResponsibilityRepository {
+  constructor(
+    private readonly db: Queryable,
+    private readonly tenantId: string,
+  ) {}
+
+  async upsertPrincipal(principal: Principal): Promise<void> {
+    await this.db.query(
+      `
+      insert into principals (
+        tenant_id, id, kind, display_name, email, created_at, updated_at, disabled_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+      on conflict (tenant_id, id) do update set
+        kind = excluded.kind,
+        display_name = excluded.display_name,
+        email = excluded.email,
+        updated_at = excluded.updated_at,
+        disabled_at = excluded.disabled_at
+    `,
+      principalParams(this.tenantId, principal),
+    );
+  }
+
+  async getPrincipal(id: string): Promise<Principal | null> {
+    const result = await this.db.query(
+      "select * from principals where tenant_id = $1 and id = $2",
+      [this.tenantId, id],
+    );
+    return result.rows[0] ? principalFromRow(result.rows[0]) : null;
+  }
+
+  async listPrincipals(options: {
+    kind?: Principal["kind"] | undefined;
+    includeDisabled?: boolean | undefined;
+    limit?: number | undefined;
+  } = {}): Promise<Principal[]> {
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
+    const clauses = ["tenant_id = $1"];
+    const params: unknown[] = [this.tenantId];
+    if (options.kind) {
+      params.push(options.kind);
+      clauses.push(`kind = $${params.length}`);
+    }
+    if (!options.includeDisabled) {
+      clauses.push("disabled_at is null");
+    }
+    params.push(limit);
+    const result = await this.db.query(
+      `
+      select * from principals
+      where ${clauses.join(" and ")}
+      order by display_name asc, id asc
+      limit $${params.length}
+    `,
+      params,
+    );
+    return result.rows.map(principalFromRow);
+  }
+
+  async upsertExternalIdentity(identity: ExternalIdentity): Promise<void> {
+    await this.db.query(
+      `
+      insert into external_identities (
+        tenant_id, connection_id, provider, external_kind, external_id,
+        external_display_name, external_email, principal_id, confidence,
+        created_at, updated_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      on conflict (tenant_id, connection_id, provider, external_kind, external_id) do update set
+        external_display_name = excluded.external_display_name,
+        external_email = excluded.external_email,
+        principal_id = excluded.principal_id,
+        confidence = excluded.confidence,
+        updated_at = excluded.updated_at
+    `,
+      externalIdentityParams(this.tenantId, identity),
+    );
+  }
+
+  async getExternalIdentity(
+    connectionId: string,
+    provider: string,
+    externalKind: ExternalIdentity["externalKind"],
+    externalId: string,
+  ): Promise<ExternalIdentity | null> {
+    const result = await this.db.query(
+      `
+      select * from external_identities
+      where tenant_id = $1 and connection_id = $2 and provider = $3 and external_kind = $4 and external_id = $5
+    `,
+      [this.tenantId, connectionId, provider, externalKind, externalId],
+    );
+    return result.rows[0] ? externalIdentityFromRow(result.rows[0]) : null;
+  }
+
+  async listExternalIdentities(options: {
+    connectionId?: string | undefined;
+    provider?: string | undefined;
+    principalId?: string | null | undefined;
+    unmappedOnly?: boolean | undefined;
+    limit?: number | undefined;
+  } = {}): Promise<ExternalIdentity[]> {
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
+    const clauses = ["tenant_id = $1"];
+    const params: unknown[] = [this.tenantId];
+    if (options.connectionId) {
+      params.push(options.connectionId);
+      clauses.push(`connection_id = $${params.length}`);
+    }
+    if (options.provider) {
+      params.push(options.provider);
+      clauses.push(`provider = $${params.length}`);
+    }
+    if (options.unmappedOnly) {
+      clauses.push("principal_id is null");
+    } else if (options.principalId !== undefined) {
+      params.push(options.principalId);
+      clauses.push(`principal_id is not distinct from $${params.length}`);
+    }
+    params.push(limit);
+    const result = await this.db.query(
+      `
+      select * from external_identities
+      where ${clauses.join(" and ")}
+      order by updated_at desc, external_id asc
+      limit $${params.length}
+    `,
+      params,
+    );
+    return result.rows.map(externalIdentityFromRow);
+  }
+
+  async upsertTaskResponsibility(responsibility: TaskResponsibility): Promise<void> {
+    await this.db.query(
+      `
+      insert into task_responsibilities (
+        tenant_id, project_id, task_id, principal_id, role, source,
+        created_at, updated_at, archived_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      on conflict (tenant_id, project_id, task_id, principal_id, role) do update set
+        source = excluded.source,
+        updated_at = excluded.updated_at,
+        archived_at = excluded.archived_at
+    `,
+      taskResponsibilityParams(this.tenantId, responsibility),
+    );
+  }
+
+  async listTaskResponsibilities(options: {
+    projectId: string;
+    taskId?: string | undefined;
+    principalId?: string | undefined;
+    role?: TaskResponsibility["role"] | undefined;
+    includeArchived?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<TaskResponsibility[]> {
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
+    const clauses = ["tenant_id = $1", "project_id = $2"];
+    const params: unknown[] = [this.tenantId, options.projectId];
+    if (options.taskId) {
+      params.push(options.taskId);
+      clauses.push(`task_id = $${params.length}`);
+    }
+    if (options.principalId) {
+      params.push(options.principalId);
+      clauses.push(`principal_id = $${params.length}`);
+    }
+    if (options.role) {
+      params.push(options.role);
+      clauses.push(`role = $${params.length}`);
+    }
+    if (!options.includeArchived) {
+      clauses.push("archived_at is null");
+    }
+    params.push(limit);
+    const result = await this.db.query(
+      `
+      select * from task_responsibilities
+      where ${clauses.join(" and ")}
+      order by updated_at desc, task_id asc, principal_id asc
+      limit $${params.length}
+    `,
+      params,
+    );
+    return result.rows.map(taskResponsibilityFromRow);
+  }
+
+  async archiveTaskResponsibility(
+    projectId: string,
+    taskId: string,
+    principalId: string,
+    role: TaskResponsibility["role"],
+    archivedAt: string,
+  ): Promise<TaskResponsibility | null> {
+    const result = await this.db.query(
+      `
+      update task_responsibilities
+      set archived_at = $6, updated_at = $6
+      where tenant_id = $1 and project_id = $2 and task_id = $3 and principal_id = $4 and role = $5
+      returning *
+    `,
+      [this.tenantId, projectId, taskId, principalId, role, archivedAt],
+    );
+    return result.rows[0] ? taskResponsibilityFromRow(result.rows[0]) : null;
+  }
+
+  async upsertDelegationRule(rule: DelegationRule): Promise<void> {
+    await this.db.query(
+      `
+      insert into delegation_rules (
+        tenant_id, project_id, id, principal_id, target_kind, target_id,
+        scope_query, priority, enabled, created_at, updated_at, archived_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      on conflict (tenant_id, project_id, id) do update set
+        principal_id = excluded.principal_id,
+        target_kind = excluded.target_kind,
+        target_id = excluded.target_id,
+        scope_query = excluded.scope_query,
+        priority = excluded.priority,
+        enabled = excluded.enabled,
+        updated_at = excluded.updated_at,
+        archived_at = excluded.archived_at
+    `,
+      delegationRuleParams(this.tenantId, rule),
+    );
+  }
+
+  async listDelegationRules(options: {
+    projectId: string;
+    principalId?: string | undefined;
+    enabledOnly?: boolean | undefined;
+    includeArchived?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<DelegationRule[]> {
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
+    const clauses = ["tenant_id = $1", "project_id = $2"];
+    const params: unknown[] = [this.tenantId, options.projectId];
+    if (options.principalId) {
+      params.push(options.principalId);
+      clauses.push(`principal_id = $${params.length}`);
+    }
+    if (options.enabledOnly) {
+      clauses.push("enabled = true");
+    }
+    if (!options.includeArchived) {
+      clauses.push("archived_at is null");
+    }
+    params.push(limit);
+    const result = await this.db.query(
+      `
+      select * from delegation_rules
+      where ${clauses.join(" and ")}
+      order by priority desc, updated_at desc, id asc
+      limit $${params.length}
+    `,
+      params,
+    );
+    return result.rows.map(delegationRuleFromRow);
   }
 }
 
@@ -2817,6 +3087,132 @@ function hostedSecretFromRow(row: any): HostedSecret {
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     rotatedAt: nullableIso(row.rotated_at),
+    archivedAt: nullableIso(row.archived_at),
+  };
+}
+
+function principalParams(tenantId: string, principal: Principal): unknown[] {
+  return [
+    tenantId,
+    principal.id,
+    principal.kind,
+    principal.displayName,
+    principal.email,
+    principal.createdAt,
+    principal.updatedAt,
+    principal.disabledAt,
+  ];
+}
+
+function principalFromRow(row: any): Principal {
+  return {
+    tenantId: row.tenant_id,
+    id: row.id,
+    kind: row.kind,
+    displayName: row.display_name,
+    email: row.email,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    disabledAt: nullableIso(row.disabled_at),
+  };
+}
+
+function externalIdentityParams(
+  tenantId: string,
+  identity: ExternalIdentity,
+): unknown[] {
+  return [
+    tenantId,
+    identity.connectionId,
+    identity.provider,
+    identity.externalKind,
+    identity.externalId,
+    identity.externalDisplayName,
+    identity.externalEmail,
+    identity.principalId,
+    identity.confidence,
+    identity.createdAt,
+    identity.updatedAt,
+  ];
+}
+
+function externalIdentityFromRow(row: any): ExternalIdentity {
+  return {
+    tenantId: row.tenant_id,
+    connectionId: row.connection_id,
+    provider: row.provider,
+    externalKind: row.external_kind,
+    externalId: row.external_id,
+    externalDisplayName: row.external_display_name,
+    externalEmail: row.external_email,
+    principalId: row.principal_id,
+    confidence: row.confidence,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function taskResponsibilityParams(
+  tenantId: string,
+  responsibility: TaskResponsibility,
+): unknown[] {
+  return [
+    tenantId,
+    responsibility.projectId,
+    responsibility.taskId,
+    responsibility.principalId,
+    responsibility.role,
+    responsibility.source,
+    responsibility.createdAt,
+    responsibility.updatedAt,
+    responsibility.archivedAt,
+  ];
+}
+
+function taskResponsibilityFromRow(row: any): TaskResponsibility {
+  return {
+    tenantId: row.tenant_id,
+    projectId: row.project_id,
+    taskId: row.task_id,
+    principalId: row.principal_id,
+    role: row.role,
+    source: row.source,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+    archivedAt: nullableIso(row.archived_at),
+  };
+}
+
+function delegationRuleParams(tenantId: string, rule: DelegationRule): unknown[] {
+  return [
+    tenantId,
+    rule.projectId,
+    rule.id,
+    rule.principalId,
+    rule.targetKind,
+    rule.targetId,
+    rule.scopeQuery,
+    rule.priority,
+    rule.enabled,
+    rule.createdAt,
+    rule.updatedAt,
+    rule.archivedAt,
+  ];
+}
+
+function delegationRuleFromRow(row: any): DelegationRule {
+  return {
+    tenantId: row.tenant_id,
+    projectId: row.project_id,
+    id: row.id,
+    principalId: row.principal_id,
+    targetKind: row.target_kind,
+    targetId: row.target_id,
+    scopeQuery: row.scope_query,
+    priority: row.priority,
+    enabled: row.enabled,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
     archivedAt: nullableIso(row.archived_at),
   };
 }

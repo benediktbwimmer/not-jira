@@ -1,7 +1,9 @@
 import type {
   Activity,
   Comment,
+  DelegationRule,
   Dependency,
+  ExternalIdentity,
   HostedAuditEvent,
   HostedIdentity,
   HostedSecret,
@@ -14,10 +16,12 @@ import type {
   ConnectorSyncRun,
   Migration,
   Project,
+  Principal,
   QueueFeed,
   SavedView,
   Tag,
   Task,
+  TaskResponsibility,
   TaskTag,
   TaskListFilters,
   Track,
@@ -193,6 +197,54 @@ export interface HostedSecretRepository {
   archive(id: string, archivedAt: string): Promise<void>;
 }
 
+export interface ResponsibilityRepository {
+  upsertPrincipal(principal: Principal): Promise<void>;
+  getPrincipal(id: string): Promise<Principal | null>;
+  listPrincipals(options?: {
+    kind?: Principal["kind"] | undefined;
+    includeDisabled?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<Principal[]>;
+  upsertExternalIdentity(identity: ExternalIdentity): Promise<void>;
+  getExternalIdentity(
+    connectionId: string,
+    provider: string,
+    externalKind: ExternalIdentity["externalKind"],
+    externalId: string,
+  ): Promise<ExternalIdentity | null>;
+  listExternalIdentities(options?: {
+    connectionId?: string | undefined;
+    provider?: string | undefined;
+    principalId?: string | null | undefined;
+    unmappedOnly?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<ExternalIdentity[]>;
+  upsertTaskResponsibility(responsibility: TaskResponsibility): Promise<void>;
+  listTaskResponsibilities(options: {
+    projectId: string;
+    taskId?: string | undefined;
+    principalId?: string | undefined;
+    role?: TaskResponsibility["role"] | undefined;
+    includeArchived?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<TaskResponsibility[]>;
+  archiveTaskResponsibility(
+    projectId: string,
+    taskId: string,
+    principalId: string,
+    role: TaskResponsibility["role"],
+    archivedAt: string,
+  ): Promise<TaskResponsibility | null>;
+  upsertDelegationRule(rule: DelegationRule): Promise<void>;
+  listDelegationRules(options: {
+    projectId: string;
+    principalId?: string | undefined;
+    enabledOnly?: boolean | undefined;
+    includeArchived?: boolean | undefined;
+    limit?: number | undefined;
+  }): Promise<DelegationRule[]>;
+}
+
 export interface ConnectorRepository {
   upsertConnection(connection: ConnectorConnection): Promise<void>;
   getConnection(projectId: string, id: string): Promise<ConnectorConnection | null>;
@@ -302,6 +354,7 @@ export interface AppStore extends RepositorySet {
   hostedIdentity?: HostedIdentityRepository;
   hostedAudit?: HostedAuditRepository;
   hostedSecrets?: HostedSecretRepository;
+  responsibilities?: ResponsibilityRepository;
   connectors?: ConnectorRepository;
   transaction<T>(fn: (repos: RepositorySet) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;

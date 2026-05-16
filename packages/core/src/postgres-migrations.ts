@@ -566,5 +566,103 @@ export const postgresMigrations: StoreMigration[] = [
       create index if not exists sync_queue_items_local_idx
         on sync_queue_items(tenant_id, project_id, local_kind, local_id, detected_at desc);
     `
+  },
+  {
+    id: "pg0007",
+    name: "hosted responsibility identity mapping",
+    sql: `
+      create table if not exists principals (
+        tenant_id text not null references tenants(id) on delete cascade,
+        id text not null,
+        kind text not null check (kind in ('user', 'team', 'service_account', 'bot')),
+        display_name text not null,
+        email text null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        disabled_at timestamptz null,
+        primary key (tenant_id, id)
+      );
+
+      create index if not exists principals_email_idx
+        on principals(tenant_id, lower(email))
+        where email is not null and disabled_at is null;
+      create index if not exists principals_kind_idx
+        on principals(tenant_id, kind, display_name)
+        where disabled_at is null;
+
+      create table if not exists external_identities (
+        tenant_id text not null references tenants(id) on delete cascade,
+        connection_id text not null,
+        provider text not null,
+        external_kind text not null check (external_kind in ('user', 'team', 'bot', 'service_account')),
+        external_id text not null,
+        external_display_name text null,
+        external_email text null,
+        principal_id text null,
+        confidence text not null check (confidence in ('verified', 'inferred', 'unmapped')),
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        primary key (tenant_id, connection_id, provider, external_kind, external_id),
+        foreign key (tenant_id, principal_id)
+          references principals(tenant_id, id) on delete set null
+      );
+
+      create index if not exists external_identities_principal_idx
+        on external_identities(tenant_id, principal_id, provider, updated_at desc);
+      create index if not exists external_identities_unmapped_idx
+        on external_identities(tenant_id, provider, updated_at desc)
+        where principal_id is null;
+
+      create table if not exists task_responsibilities (
+        tenant_id text not null,
+        project_id text not null,
+        task_id text not null,
+        principal_id text not null,
+        role text not null check (role in ('owner', 'reviewer', 'watcher')),
+        source text not null check (source in ('manual', 'connector', 'delegation')),
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        archived_at timestamptz null,
+        primary key (tenant_id, project_id, task_id, principal_id, role),
+        foreign key (tenant_id, project_id, task_id)
+          references tasks(tenant_id, project_id, id) on delete cascade,
+        foreign key (tenant_id, principal_id)
+          references principals(tenant_id, id) on delete cascade
+      );
+
+      create index if not exists task_responsibilities_task_idx
+        on task_responsibilities(tenant_id, project_id, task_id, role)
+        where archived_at is null;
+      create index if not exists task_responsibilities_principal_idx
+        on task_responsibilities(tenant_id, project_id, principal_id, role)
+        where archived_at is null;
+
+      create table if not exists delegation_rules (
+        tenant_id text not null,
+        project_id text not null,
+        id text not null,
+        principal_id text not null,
+        target_kind text not null check (target_kind in ('track', 'actor_pool', 'principal')),
+        target_id text not null,
+        scope_query text null,
+        priority integer not null default 0,
+        enabled boolean not null default true,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        archived_at timestamptz null,
+        primary key (tenant_id, project_id, id),
+        foreign key (tenant_id, project_id)
+          references projects(tenant_id, id) on delete cascade,
+        foreign key (tenant_id, principal_id)
+          references principals(tenant_id, id) on delete cascade
+      );
+
+      create index if not exists delegation_rules_principal_idx
+        on delegation_rules(tenant_id, project_id, principal_id, enabled, priority desc)
+        where archived_at is null;
+      create index if not exists delegation_rules_scope_idx
+        on delegation_rules(tenant_id, project_id, scope_query)
+        where archived_at is null and scope_query is not null;
+    `
   }
 ];

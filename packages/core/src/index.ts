@@ -9,6 +9,7 @@ export * from "./postgres-matcher.js";
 export * from "./hosted-identity.js";
 export * from "./connector-events.js";
 export * from "./connector-sync.js";
+export * from "./responsibility-mapping.js";
 export * from "./connector-flows.js";
 export * from "./connector-reconciliation.js";
 export * from "./github-connector.js";
