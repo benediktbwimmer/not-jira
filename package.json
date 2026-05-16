@@ -13,6 +13,7 @@
     "build": "npm run build --workspaces",
     "check": "npm run check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "benchmark:gates": "node scripts/benchmark-gates.mjs",
     "dev:web": "npm run dev -w @unblock/web",
     "dev:server": "npm run dev -w @unblock/server",
     "unblock": "npm run dev -w @unblock/cli --"
