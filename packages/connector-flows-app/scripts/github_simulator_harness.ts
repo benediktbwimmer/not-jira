@@ -291,6 +291,8 @@ export async function runGithubSimulatorHarness(
         executorProcesses: options.flowExecutorProcesses,
         executorConcurrency: options.flowExecutorConcurrency,
         webhookBind: `127.0.0.1:${ingressPort}`,
+        disableScheduler: options.mode !== "e2e",
+        schedulerIntervalMs: options.schedulerIntervalMs,
         metadataJson,
       });
       if (!result.ok || !result.runtimePlan) {
